@@ -53,6 +53,18 @@ export function downscaleDataURL(img: HTMLImageElement, maxSide: number, quality
 
 const rad = (deg: number) => (deg * Math.PI) / 180
 
+/**
+ * 旋转后为不出「空角」需要的放大倍数(绕中心旋转,再把画面撑满原框)。
+ * 例:16:9 画面转 5°,约为 1.12。手机修图 App 的「自动裁切」就是这个。
+ */
+export function straightenZoom(w: number, h: number, deg: number): number {
+  const t = Math.abs(rad(deg))
+  if (t < 1e-4) return 1
+  const c = Math.cos(t)
+  const s = Math.sin(t)
+  return Math.max(c + (h / w) * s, c + (w / h) * s)
+}
+
 /** 摆正后的整幅画面(未裁剪),映射到 outW×outH(保持原图宽高比) */
 export function renderStraightened(img: HTMLImageElement, rotateDeg: number, outW: number, outH: number): HTMLCanvasElement {
   const W = img.naturalWidth
@@ -62,10 +74,12 @@ export function renderStraightened(img: HTMLImageElement, rotateDeg: number, out
   if (!ctx) return c
   ctx.imageSmoothingQuality = 'high'
   const scale = outW / W
+  const z = straightenZoom(W, H, rotateDeg)
   ctx.save()
   ctx.scale(scale, scale)
   ctx.translate(W / 2, H / 2)
   ctx.rotate(rad(rotateDeg))
+  ctx.scale(z, z)
   ctx.translate(-W / 2, -H / 2)
   ctx.drawImage(img, 0, 0, W, H)
   ctx.restore()
@@ -84,11 +98,13 @@ export function renderCrop(img: HTMLImageElement, rotateDeg: number, crop: CropR
   if (!ctx) return c
   ctx.imageSmoothingQuality = 'high'
   const scale = outW / sw
+  const z = straightenZoom(W, H, rotateDeg)
   ctx.save()
   ctx.scale(scale, scale)
   ctx.translate(-sx, -sy)
   ctx.translate(W / 2, H / 2)
   ctx.rotate(rad(rotateDeg))
+  ctx.scale(z, z)
   ctx.translate(-W / 2, -H / 2)
   ctx.drawImage(img, 0, 0, W, H)
   ctx.restore()

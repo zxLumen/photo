@@ -15,6 +15,7 @@ import { ExportDialog } from './components/ExportDialog.js'
 import { Uploader } from './components/Uploader.js'
 import { SampleGallery } from './components/SampleGallery.js'
 import { detectColorSupport } from './lib/colorPipeline.js'
+import { detectTilt } from './lib/straighten.js'
 
 type Tab = 'compose' | 'adjust' | 'works'
 
@@ -120,7 +121,9 @@ export function App() {
         const { analysis: a } = await api.analyze(dataUrl, width, height)
         setAnalysis(a)
         setCrop(a.crop)
-        setRotate(a.rotate)
+        // 角度交给本地算法(模型估角不准):检出明显倾斜就用它,否则用模型给的
+        const tilt = detectTilt(img)
+        setRotate(tilt.angle !== 0 ? tilt.angle : a.rotate)
         setComposition(a.composition)
         setSubjects(a.subjects)
         setTone(mergeTone(a.tone))
@@ -199,6 +202,13 @@ export function App() {
     setTone(t)
     setAi('success', '已自动调色')
   }, [image, rotate, crop, setAi])
+
+  const runAutoStraighten = useCallback(() => {
+    if (!image) return
+    const t = detectTilt(image)
+    setRotate(t.angle)
+    setAi('success', t.angle !== 0 ? `已摆正 ${t.angle.toFixed(1)}°` : '画面已基本水平')
+  }, [image, setAi])
 
   const runPerfect = useCallback(async () => {
     await runAnalyze()
@@ -305,8 +315,6 @@ export function App() {
   /* ---------------- 渲染 ---------------- */
 
   const hasImage = !!image
-  // AI 检出的倾斜角:优先用 horizon,其次用 rotate(模型给出的整体摆正角)
-  const aiRotate = analysis?.horizon?.angle ?? analysis?.rotate ?? 0
 
   return (
     <div className="app">
@@ -417,11 +425,10 @@ export function App() {
                 <button
                   type="button"
                   className="btn small ghost"
-                  onClick={() => setRotate(aiRotate)}
-                  disabled={!analysis || Math.abs(aiRotate) < 0.05}
-                  title={analysis ? `AI 检出的倾斜角:${aiRotate.toFixed(1)}°,点击一键回正` : '先点「一键构图」,AI 会同时判断并摆正倾斜'}
+                  onClick={runAutoStraighten}
+                  title="本地算法自动检测地平线 / 建筑腰线并回正(比模型估角准)"
                 >
-                  AI 摆正{analysis && Math.abs(aiRotate) >= 0.05 ? ` ${aiRotate > 0 ? '+' : ''}${aiRotate.toFixed(1)}°` : ''}
+                  自动摆正
                 </button>
                 <button type="button" className="btn small ghost" onClick={() => setCrop({ x: 0, y: 0, w: 1, h: 1 })}>
                   重置裁剪

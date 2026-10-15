@@ -20,7 +20,7 @@ export interface SamplePhoto {
 export const SAMPLE_PHOTOS: SamplePhoto[] = [
   { id: 'sunset', name: '落日星芒', issue: '逆光、高光溢出、暗部压死', file: '/samples/sunset.jpg', thumb: '/samples/thumb/sunset.jpg' },
   { id: 'forest', name: '林地小径', issue: '低对比、偏冷、氛围发闷', file: '/samples/forest.jpg', thumb: '/samples/thumb/forest.jpg' },
-  { id: 'lake', name: '湖面倒影', issue: '薄雾发灰、通透度不足', file: '/samples/lake.jpg', thumb: '/samples/thumb/lake.jpg' },
+  { id: 'lake', name: '湖面倒影', issue: '地平线倾斜、需智能摆正 + 发灰', file: '/samples/lake.jpg', thumb: '/samples/thumb/lake.jpg' },
   { id: 'city-night', name: '城市夜色', issue: '夜景噪点、白平衡偏色', file: '/samples/city-night.jpg', thumb: '/samples/thumb/city-night.jpg' },
   { id: 'milkyway', name: '银河山峰', issue: '极暗、噪点重、暗部死黑', file: '/samples/milkyway.jpg', thumb: '/samples/thumb/milkyway.jpg' },
   { id: 'portrait', name: '人物肖像', issue: '肤色发灰、高光需保护', file: '/samples/portrait.jpg', thumb: '/samples/thumb/portrait.jpg' },
