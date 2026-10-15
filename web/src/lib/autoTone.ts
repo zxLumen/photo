@@ -39,6 +39,11 @@ const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(mi
 /**
  * 客户端直方图自动调色(与 AI 建议互补,防止模型幻觉)。
  * 输入是降采样后的 RGBA 像素(几百像素级即可)。
+ *
+ * 做了三件「真正能看出效果、又不过火」的事:
+ *  1. 把中位亮度推向 0.46(限制 ±1.2 EV);//曝光
+ *  2. 压黑场 / 提白场 + 补对比,治「发灰」;//黑白场 + 对比
+ *  3. 只在偏色明显时才做灰世界白平衡(避免毁掉落日这类本就偏暖的氛围)。
  */
 export function computeAutoTone(data: Uint8ClampedArray, width: number, height: number): ToneParams {
   const n = width * height
@@ -50,6 +55,7 @@ export function computeAutoTone(data: Uint8ClampedArray, width: number, height: 
   let bs = 0
   let lSum = 0
   let l2Sum = 0
+  let clipped = 0
   for (let i = 0; i < n; i++) {
     const r = data[i * 4]
     const g = data[i * 4 + 1]
@@ -61,9 +67,11 @@ export function computeAutoTone(data: Uint8ClampedArray, width: number, height: 
     hist[Math.min(255, Math.round(l * 255))] += 1
     lSum += l
     l2Sum += l * l
+    if (l > 0.985) clipped += 1
   }
   const meanL = lSum / n
   const stdL = Math.sqrt(Math.max(0, l2Sum / n - meanL * meanL))
+  const clipFrac = clipped / n
 
   const percentile = (p: number) => {
     const target = n * p
@@ -74,40 +82,55 @@ export function computeAutoTone(data: Uint8ClampedArray, width: number, height: 
     }
     return 1
   }
-  const black = percentile(0.005)
-  const white = percentile(0.995)
+  const black = percentile(0.004)
+  const median = percentile(0.5)
+  const white = percentile(0.996)
 
   const rAvg = rs / n
   const gAvg = gs / n
   const bAvg = bs / n
 
-  // 曝光:把平均亮度推向 0.5(限制在 ±1 EV)
-  const ev = clamp(Math.log2((0.5 + 0.02) / (meanL + 0.02)), -1, 1)
-  const exposure = clamp(ev * 100, -100, 100)
+  // 曝光:把中位亮度推向 0.46(shader 里曝光 100 = 1.5EV)
+  const ev = clamp(Math.log2((0.46 + 0.015) / (median + 0.015)), -1.2, 1.2)
+  const exposure = clamp((ev / 1.5) * 100, -100, 100)
 
-  // 黑白场:压严黑场 / 提纯白场(画面发灰时最有效)
-  const blacks = clamp((0.08 - black) * 400, -60, 60)
-  const whites = clamp((0.92 - white) * 400, -60, 60)
+  // 黑/白场:发灰(黑场不在底、白场不到顶)时收紧
+  const blacks = clamp((0.028 - black) * 240, -65, 0)
+  const whites = clamp((0.965 - white) * 300, 0, 55)
 
-  // 对比:整体偏平(标准差小)时补一点
-  const contrast = clamp((0.22 - stdL) * 300, -30, 50)
+  // 高光回收:大面积接近纯白时压一点
+  const highlights = clamp(-clipFrac * 340, -48, 0)
 
-  // 灰世界白平衡
-  const temperature = clamp((bAvg - rAvg) * 2.0, -70, 70)
-  const tint = clamp((gAvg - (rAvg + bAvg) / 2) * 2.0, -60, 60)
+  // 暗部提亮:整体偏暗时补暗部(不硬提曝光)
+  const shadows = clamp((0.30 - median) * 130, 0, 46)
 
-  // 色彩:偏灰时补一点自然饱和度
-  const vib = clamp((0.22 - stdL) * 120, 0, 20)
+  // 对比:整体偏平时补;标准差已经很大则不动
+  const contrast = clamp((0.20 - stdL) * 210, -12, 42)
+
+  // 灰世界白平衡(收敛到 ±32,避免毁掉刻意的暖/冷调)
+  const temperature = clamp((bAvg - rAvg) * 1.25, -32, 32)
+  const tint = clamp((gAvg - (rAvg + bAvg) / 2) * 1.4, -28, 28)
+
+  // 色彩与通透:发灰时补自然饱和度与清晰度
+  const vibrance = clamp((0.26 - stdL) * 90, 0, 26)
+  const clarity = clamp((0.20 - stdL) * 120, 0, 22)
+
+  // 极暗夜景通常噪点明显 → 轻量降噪
+  const denoise = clamp((0.26 - median) * 80, 0, 16)
 
   return {
     ...emptyTone(),
     exposure: Math.round(exposure),
     contrast: Math.round(contrast),
+    highlights: Math.round(highlights),
+    shadows: Math.round(shadows),
     whites: Math.round(whites),
     blacks: Math.round(blacks),
     temperature: Math.round(temperature),
     tint: Math.round(tint),
-    vibrance: Math.round(vib),
+    vibrance: Math.round(vibrance),
+    clarity: Math.round(clarity),
+    denoise: Math.round(denoise),
   }
 }
 
@@ -126,13 +149,28 @@ export function mergeTone(partial: Partial<ToneParams> | null | undefined, base?
   return out
 }
 
-/** 风格预设(= 一组 tone 增量)。 */
+/** 风格预设(= 一组 tone 增量)。数值按新管线(线性光 + 乘性分区 + S 曲线)标定。 */
 export const STYLE_PRESETS: Record<string, { label: string; tone: Partial<ToneParams> }> = {
   none: { label: '原图', tone: {} },
-  portrait: { label: '人像', tone: { exposure: 6, contrast: 8, shadows: 12, highlights: -8, temperature: 8, vibrance: 10, clarity: -6, sharpen: 8 } },
-  landscape: { label: '风景', tone: { contrast: 12, whites: 6, blacks: -6, vibrance: 20, saturation: 6, clarity: 14, sharpen: 12 } },
-  night: { label: '夜景', tone: { exposure: 8, contrast: 10, shadows: 20, blacks: -10, temperature: -6, vibrance: 8, denoise: 10 } },
-  mono: { label: '黑白', tone: { saturation: -100, contrast: 14, clarity: 12, blacks: -6 } },
-  film: { label: '胶片', tone: { exposure: 4, contrast: -6, highlights: -10, shadows: 14, temperature: 6, tint: -4, vibrance: 6, blacks: 8 } },
-  vivid: { label: '浓郁', tone: { contrast: 14, vibrance: 24, saturation: 10, clarity: 10, sharpen: 10 } },
+  portrait: {
+    label: '人像',
+    tone: { exposure: 5, contrast: 6, highlights: -12, shadows: 16, whites: 4, blacks: -8, temperature: 10, tint: 3, vibrance: 12, clarity: -8, sharpen: 10 },
+  },
+  landscape: {
+    label: '风景',
+    tone: { contrast: 14, highlights: -14, shadows: 12, whites: 8, blacks: -14, vibrance: 22, saturation: 4, clarity: 16, sharpen: 14 },
+  },
+  night: {
+    label: '夜景',
+    tone: { exposure: 14, contrast: 8, highlights: -6, shadows: 28, blacks: -14, temperature: -8, vibrance: 10, clarity: 8, denoise: 18 },
+  },
+  mono: { label: '黑白', tone: { saturation: -100, contrast: 18, whites: 8, blacks: -14, clarity: 14, sharpen: 8 } },
+  film: {
+    label: '胶片',
+    tone: { exposure: 4, contrast: -6, highlights: -14, shadows: 18, blacks: 6, temperature: 6, tint: -4, vibrance: 8 },
+  },
+  vivid: {
+    label: '浓郁',
+    tone: { contrast: 16, highlights: -8, blacks: -8, vibrance: 26, saturation: 8, clarity: 12, sharpen: 10 },
+  },
 }

@@ -4,6 +4,7 @@ import { guideLines, guidePoints } from '../lib/compose.js'
 import { containsPoint, handleAt, moveCrop, resizeCrop, snapMoveToGuides, type HandleId } from '../lib/crop.js'
 import { ColorRenderer } from '../lib/colorPipeline.js'
 import { renderStraightened } from '../lib/imageOps.js'
+import { emptyTone } from '../lib/autoTone.js'
 
 interface Props {
   image: HTMLImageElement
@@ -12,13 +13,16 @@ interface Props {
   composition: ComposeId
   subjects: Subject[]
   tone: ToneParams
+  /** 按住「看原图」时为真:隐藏调色(裁剪框仍在),用于同框对比颜色 */
+  showOriginal?: boolean
   onCrop: (c: CropRect) => void
 }
 
 const SNAP_TOL_PX = 12
 const HANDLE_TOL_PX = 13
+const NO_TONE = emptyTone()
 
-export function CropStage({ image, rotate, crop, composition, subjects, tone, onCrop }: Props) {
+export function CropStage({ image, rotate, crop, composition, subjects, tone, showOriginal, onCrop }: Props) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const baseRef = useRef<HTMLCanvasElement | null>(null)
   const overlayRef = useRef<HTMLCanvasElement | null>(null)
@@ -68,7 +72,7 @@ export function CropStage({ image, rotate, crop, composition, subjects, tone, on
     const geom = renderStraightened(image, rotate, pw, ph)
     if (r.supported) {
       r.setSource(geom, pw, ph)
-      r.render(tone)
+      r.render(showOriginal ? NO_TONE : tone)
     } else {
       // 无 WebGL:退化为纯几何(不调色)
       canvas.width = pw
@@ -85,8 +89,8 @@ export function CropStage({ image, rotate, crop, composition, subjects, tone, on
   // 仅调色变化 → 复用已上传纹理
   useEffect(() => {
     const r = rendererRef.current
-    if (r?.supported) r.render(tone)
-  }, [tone])
+    if (r?.supported) r.render(showOriginal ? NO_TONE : tone)
+  }, [tone, showOriginal])
 
   // 叠加层(裁剪框 / 参考线 / 手柄 / 主体)
   useLayoutEffect(() => {

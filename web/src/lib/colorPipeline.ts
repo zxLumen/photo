@@ -9,11 +9,25 @@ void main() {
 }
 `
 
+/**
+ * 调色管线(预览与导出共用同一套 shader,保证「所见即所得」)。
+ *
+ * 设计要点(相对早期版本的关键改进):
+ *  1. **曝光 / 白平衡在线性光里做** —— sRGB 是 gamma 编码的,直接乘会偏色、发灰;
+ *     先解码到线性、调完再编码回去,颜色才准。
+ *  2. **明暗分区(高光/阴影/白/黑)用「乘性」而非「加性」** —— 加性会把画面推向
+ *     中灰、发白(所谓「漂白」),乘性只按亮度分区缩放,不会污染整体。
+ *  3. **对比度用 S 曲线** —— smoothstep 天然在两端压平,等于自带高光/暗部滚降,
+ *     提反差的同时不炸高光。
+ *  4. **参数全为零时严格等于原图** —— `u_identity` 直接输出采样色,保证「修前」
+ *     对照是真正的原始画面,且调节过程中不会出现跳变。
+ */
 const FRAG = `
 precision highp float;
 varying vec2 v_uv;
 uniform sampler2D u_image;
 uniform vec2 u_texel;
+uniform float u_identity;
 uniform float u_exposure;
 uniform float u_contrast;
 uniform float u_highlights;
@@ -29,6 +43,24 @@ uniform float u_sharpen;
 uniform float u_denoise;
 uniform float u_vignette;
 
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+
+float luma(vec3 c) { return dot(c, LUMA); }
+
+/* sRGB <-> 线性光 */
+vec3 srgb2lin(vec3 c) {
+  vec3 lo = c / 12.92;
+  vec3 hi = pow(max(c + 0.055, 0.0) / 1.055, vec3(2.4));
+  return mix(lo, hi, step(vec3(0.04045), c));
+}
+vec3 lin2srgb(vec3 c) {
+  c = max(c, 0.0);
+  vec3 lo = c * 12.92;
+  vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
+  return mix(lo, hi, step(vec3(0.0031308), c));
+}
+
+/* 5 抽头十字模糊(用于降噪 / 清晰度 / 锐化的差分) */
 vec3 blur3(vec2 uv) {
   vec3 s = texture2D(u_image, uv).rgb * 0.3333333;
   s += texture2D(u_image, uv + vec2(u_texel.x, 0.0)).rgb * 0.1666667;
@@ -38,64 +70,85 @@ vec3 blur3(vec2 uv) {
   return s;
 }
 
-float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
-
 void main() {
   vec3 c = texture2D(u_image, v_uv).rgb;
 
-  if (u_denoise > 0.001) {
-    c = mix(c, blur3(v_uv), u_denoise * 0.7);
+  // 无任何调整 → 原样输出(保证「修前」对照精确,也省一次完整计算)
+  if (u_identity > 0.5) {
+    gl_FragColor = vec4(c, 1.0);
+    return;
   }
 
-  // 曝光:±1 EV
-  c *= pow(2.0, u_exposure);
+  // 降噪(感知空间,轻度)
+  if (u_denoise > 0.001) c = mix(c, blur3(v_uv), u_denoise / 100.0 * 0.8);
 
-  // 白平衡:色温(暖/冷)+ 色调(品红/绿)
-  c.r *= 1.0 + u_temperature * 0.28;
-  c.b *= 1.0 - u_temperature * 0.28;
-  float mg = max(u_tint, 0.0);
-  float gr = max(-u_tint, 0.0);
-  c.r *= 1.0 + mg * 0.12;
-  c.b *= 1.0 + mg * 0.12;
-  c.g *= 1.0 + gr * 0.2;
+  // ---- 线性光:白平衡 + 曝光 ----
+  vec3 lin = srgb2lin(c);
 
-  float l = luma(c);
-  float hi = smoothstep(0.5, 1.0, l);
-  float sh = 1.0 - smoothstep(0.0, 0.5, l);
-  c += u_highlights * 0.35 * hi;
-  c += u_shadows * 0.35 * sh;
+  float t = u_temperature / 100.0;
+  float ti = u_tint / 100.0;
+  lin.r *= 1.0 + t * 0.32 + ti * 0.06;
+  lin.b *= 1.0 - t * 0.32 + ti * 0.06;
+  lin.g *= 1.0 - ti * 0.22;
 
-  float l2 = luma(c);
-  c += u_whites * 0.25 * smoothstep(0.6, 1.0, l2);
-  c += u_blacks * 0.25 * (1.0 - smoothstep(0.0, 0.4, l2));
+  lin *= exp2(u_exposure / 100.0 * 1.5);   // ±1.5 EV
 
-  // 对比(绕 0.5 拉伸)
-  c = (c - 0.5) * (1.0 + u_contrast * 1.2) + 0.5;
+  // ---- 回到感知空间,做乘性明暗分区 ----
+  vec3 p = lin2srgb(lin);
+  float l = luma(p);
 
-  // 清晰度 / 锐化(与模糊做差分)
-  if (abs(u_clarity) > 0.001 || u_sharpen > 0.001) {
-    vec3 diff = c - blur3(v_uv);
-    c += diff * (u_clarity * 1.6 + u_sharpen * 1.6);
+  float mh = smoothstep(0.45, 1.00, l);      // 高光
+  float ms = 1.0 - smoothstep(0.00, 0.55, l); // 阴影
+  float mw = smoothstep(0.70, 1.00, l);      // 白场
+  float mb = 1.0 - smoothstep(0.00, 0.30, l); // 黑场
+
+  p *= 1.0 + (u_highlights / 100.0) * 0.45 * mh;
+  p *= 1.0 + (u_shadows / 100.0) * 0.55 * ms;
+  p *= 1.0 + (u_whites / 100.0) * 0.30 * mw;
+  p *= 1.0 + (u_blacks / 100.0) * 0.60 * mb;
+
+  // 对比度:S 曲线
+  float kc = u_contrast / 100.0;
+  if (kc > 0.0) {
+    vec3 s = p * p * (3.0 - 2.0 * p);
+    p = mix(p, s, min(kc, 1.0) * 0.92);
+  } else if (kc < 0.0) {
+    p = mix(p, 0.5 + (p - 0.5) * 0.62, min(-kc, 1.0));
+  }
+
+  // 清晰度(中间调局部对比)+ 锐化(细节)
+  float kcl = u_clarity / 100.0;
+  float ksh = u_sharpen / 100.0;
+  if (abs(kcl) > 0.001 || ksh > 0.001) {
+    vec3 detail = p - blur3(v_uv);
+    float mid = 1.0 - abs(2.0 * luma(p) - 1.0);
+    p += detail * (kcl * 1.5 * (0.35 + 0.65 * mid) + ksh * 1.15);
   }
 
   // 饱和度 + 自然饱和度
-  float l3 = luma(c);
-  c = mix(vec3(l3), c, 1.0 + u_saturation);
-  float mx = max(c.r, max(c.g, c.b));
-  float mn = min(c.r, min(c.g, c.b));
-  float sat = mx - mn;
-  c = mix(vec3(luma(c)), c, 1.0 + u_vibrance * (1.0 - sat) * 1.2);
+  p = mix(vec3(luma(p)), p, 1.0 + u_saturation / 100.0);
+  float mx = max(p.r, max(p.g, p.b));
+  float mn = min(p.r, min(p.g, p.b));
+  float sat = clamp(mx - mn, 0.0, 1.0);
+  p = mix(vec3(luma(p)), p, 1.0 + (u_vibrance / 100.0) * (1.0 - sat) * 1.3);
 
-  // 暗角(vignette 为负时压暗)
+  // 暗角
   if (abs(u_vignette) > 0.001) {
     vec2 d = v_uv - 0.5;
     float r = length(d) * 1.4142136;
-    float v = smoothstep(0.45, 1.05, r);
-    c *= 1.0 + v * u_vignette * 0.8;
+    p *= 1.0 + smoothstep(0.45, 1.1, r) * (u_vignette / 100.0) * 0.85;
   }
 
-  gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+  gl_FragColor = vec4(clamp(p, 0.0, 1.0), 1.0);
 }
+`
+
+/** 调色 shader 编译/链接失败时的兜底:只把纹理画出来(不调色),保证不黑屏 */
+const PASSTHROUGH_FRAG = `
+precision highp float;
+varying vec2 v_uv;
+uniform sampler2D u_image;
+void main() { gl_FragColor = texture2D(u_image, v_uv); }
 `
 
 function compile(gl: WebGLRenderingContext, type: number, src: string): WebGLShader | null {
@@ -113,6 +166,7 @@ function compile(gl: WebGLRenderingContext, type: number, src: string): WebGLSha
 const UNIFORM_NAMES = [
   'u_image',
   'u_texel',
+  'u_identity',
   'u_exposure',
   'u_contrast',
   'u_highlights',
@@ -129,12 +183,37 @@ const UNIFORM_NAMES = [
   'u_vignette',
 ] as const
 
+const TONE_KEYS = [
+  'exposure',
+  'contrast',
+  'highlights',
+  'shadows',
+  'whites',
+  'blacks',
+  'temperature',
+  'tint',
+  'vibrance',
+  'saturation',
+  'clarity',
+  'sharpen',
+  'denoise',
+  'vignette',
+] as const
+
+/** 全为零 → 恒等(原图);否则走完整管线 */
+function isIdentity(tone: ToneParams): boolean {
+  for (const k of TONE_KEYS) if (tone[k]) return false
+  return true
+}
+
 /**
  * 基于 WebGL 的实时调色管线(非破坏,预览与导出共用同一套 shader)。
  * 不可用时 `supported=false`,调用方退回「仅几何、不调色」。
  */
 export class ColorRenderer {
   readonly supported: boolean
+  /** 调色 shader 是否可用(不可用则只显示原图) */
+  private graded = false
   private gl: WebGLRenderingContext | null = null
   private program: WebGLProgram | null = null
   private texture: WebGLTexture | null = null
@@ -149,8 +228,16 @@ export class ColorRenderer {
     }
     this.gl = gl
     const vs = compile(gl, gl.VERTEX_SHADER, VERT)
-    const fs = compile(gl, gl.FRAGMENT_SHADER, FRAG)
-    if (!vs || !fs) {
+    if (!vs) {
+      this.supported = false
+      return
+    }
+    // 优先用完整调色 shader;失败则退回「只显示、不调色」的直通 shader ——
+    // 因为 canvas 一旦绑定了 WebGL 上下文就无法再取 2D 上下文,调用方的 2D 兜底会失效而整片黑屏。
+    let fs = compile(gl, gl.FRAGMENT_SHADER, FRAG)
+    this.graded = !!fs
+    if (!fs) fs = compile(gl, gl.FRAGMENT_SHADER, PASSTHROUGH_FRAG)
+    if (!fs) {
       this.supported = false
       return
     }
@@ -207,20 +294,23 @@ export class ColorRenderer {
     if (!gl || !this.program) return
     const g = (v: number) => v / 100
     gl.useProgram(this.program)
-    gl.uniform1f(this.u.u_exposure ?? null, g(tone.exposure))
-    gl.uniform1f(this.u.u_contrast ?? null, g(tone.contrast))
-    gl.uniform1f(this.u.u_highlights ?? null, g(tone.highlights))
-    gl.uniform1f(this.u.u_shadows ?? null, g(tone.shadows))
-    gl.uniform1f(this.u.u_whites ?? null, g(tone.whites))
-    gl.uniform1f(this.u.u_blacks ?? null, g(tone.blacks))
-    gl.uniform1f(this.u.u_temperature ?? null, g(tone.temperature))
-    gl.uniform1f(this.u.u_tint ?? null, g(tone.tint))
-    gl.uniform1f(this.u.u_vibrance ?? null, g(tone.vibrance))
-    gl.uniform1f(this.u.u_saturation ?? null, g(tone.saturation))
-    gl.uniform1f(this.u.u_clarity ?? null, g(tone.clarity))
-    gl.uniform1f(this.u.u_sharpen ?? null, g(tone.sharpen) )
-    gl.uniform1f(this.u.u_denoise ?? null, g(tone.denoise))
-    gl.uniform1f(this.u.u_vignette ?? null, g(tone.vignette))
+    if (this.graded) {
+      gl.uniform1f(this.u.u_identity ?? null, isIdentity(tone) ? 1 : 0)
+      gl.uniform1f(this.u.u_exposure ?? null, g(tone.exposure))
+      gl.uniform1f(this.u.u_contrast ?? null, g(tone.contrast))
+      gl.uniform1f(this.u.u_highlights ?? null, g(tone.highlights))
+      gl.uniform1f(this.u.u_shadows ?? null, g(tone.shadows))
+      gl.uniform1f(this.u.u_whites ?? null, g(tone.whites))
+      gl.uniform1f(this.u.u_blacks ?? null, g(tone.blacks))
+      gl.uniform1f(this.u.u_temperature ?? null, g(tone.temperature))
+      gl.uniform1f(this.u.u_tint ?? null, g(tone.tint))
+      gl.uniform1f(this.u.u_vibrance ?? null, g(tone.vibrance))
+      gl.uniform1f(this.u.u_saturation ?? null, g(tone.saturation))
+      gl.uniform1f(this.u.u_clarity ?? null, g(tone.clarity))
+      gl.uniform1f(this.u.u_sharpen ?? null, g(tone.sharpen))
+      gl.uniform1f(this.u.u_denoise ?? null, g(tone.denoise))
+      gl.uniform1f(this.u.u_vignette ?? null, g(tone.vignette))
+    }
     gl.drawArrays(gl.TRIANGLES, 0, 3)
   }
 

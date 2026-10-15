@@ -7,6 +7,7 @@ import { downscaleDataURL, loadImage, loadImageFile, sampleAutoTone } from './li
 import { reportAiStatus, type AiState } from './embed.js'
 import { readState, writeState } from './sessionState.js'
 import { CropStage } from './components/CropStage.js'
+import { CompareView } from './components/CompareView.js'
 import { AdjustPanel } from './components/AdjustPanel.js'
 import { WorksPanel } from './components/WorksPanel.js'
 import { SettingsPanel, type SettingsData as SettingsDataT } from './components/SettingsPanel.js'
@@ -37,6 +38,8 @@ export function App() {
   const [showExport, setShowExport] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [settings, setSettings] = useState<SettingsDataT | null>(null)
+  const [compare, setCompare] = useState(false)
+  const [holdOriginal, setHoldOriginal] = useState(false)
 
   const restoredRef = useRef(false)
   const statusRef = useRef<StatusInfo | null>(null)
@@ -139,6 +142,7 @@ export function App() {
         setStyle('none')
         setAnalysis(null)
         setTab('compose')
+        setCompare(false)
         const preview = downscaleDataURL(img, RESUME_MAX, 0.82)
         writeState('image', preview.dataUrl)
         setBusy('')
@@ -342,16 +346,42 @@ export function App() {
         ) : (
           <>
             <section className="canvas-col">
-              <CropStage
-                image={image}
-                rotate={rotate}
-                crop={crop}
-                composition={composition}
-                subjects={subjects}
-                tone={tone}
-                onCrop={setCrop}
-              />
+              {compare ? (
+                <CompareView image={image} rotate={rotate} crop={crop} tone={tone} />
+              ) : (
+                <CropStage
+                  image={image}
+                  rotate={rotate}
+                  crop={crop}
+                  composition={composition}
+                  subjects={subjects}
+                  tone={tone}
+                  showOriginal={holdOriginal}
+                  onCrop={setCrop}
+                />
+              )}
               <div className="stage-tools">
+                <button
+                  type="button"
+                  className={`btn small ${compare ? 'primary' : ''}`}
+                  onClick={() => setCompare((v) => !v)}
+                  title="在「原图」与「裁剪 + 调色后的效果」之间前后对比"
+                >
+                  ⇆ {compare ? '返回编辑' : '对比前后'}
+                </button>
+                {!compare && (
+                  <button
+                    type="button"
+                    className="btn small ghost"
+                    onPointerDown={() => setHoldOriginal(true)}
+                    onPointerUp={() => setHoldOriginal(false)}
+                    onPointerLeave={() => setHoldOriginal(false)}
+                    onPointerCancel={() => setHoldOriginal(false)}
+                    title="按住可看到未调色的原图(保留裁剪框)"
+                  >
+                    按住看原图
+                  </button>
+                )}
                 <label className="slider mini">
                   <span className="slider-label">摆正</span>
                   <input type="range" min={-15} max={15} step={0.1} value={rotate} onChange={(e) => setRotate(Number(e.target.value))} />

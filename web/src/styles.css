@@ -568,3 +568,133 @@ input[type='range']::-moz-range-thumb {
   color: var(--accent2);
   font-size: 13px;
 }
+
+/* 示例画廊(上传器内) */
+.samples {
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px dashed #333c50;
+  cursor: default;
+}
+.samples-title {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+.samples-title b {
+  color: var(--accent);
+  font-weight: 600;
+}
+.samples-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+@media (max-width: 720px) {
+  .samples-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.sample {
+  position: relative;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0a0c11;
+  text-align: left;
+  transition: 0.15s;
+}
+.sample:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.sample:disabled {
+  cursor: default;
+}
+.sample img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+.sample-name {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 7px 0;
+}
+.sample-issue {
+  display: block;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+  padding: 2px 7px 7px;
+}
+.sample-mask {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 12, 0.66);
+  font-size: 12px;
+  color: var(--accent);
+}
+.samples-credit {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #5c6478;
+}
+
+/* ---------------- 前后对比 ---------------- */
+.compare-wrap {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 10px;
+}
+.cmp-pane {
+  position: relative;
+  margin: 0;
+  background:
+    radial-gradient(circle at 50% 40%, #1a2030 0%, #0b0d12 70%),
+    repeating-conic-gradient(#101420 0% 25%, #0c0f16 0% 50%) 0 0 / 22px 22px;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cmp-pane canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+.cmp-tag {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 6px;
+  pointer-events: none;
+}
+.cmp-tag.before {
+  background: rgba(20, 24, 33, 0.85);
+  color: #cfd6e4;
+  border: 1px solid var(--line);
+}
+.cmp-tag.after {
+  background: rgba(255, 200, 90, 0.92);
+  color: #201704;
+}
+.compare-note {
+  padding: 0 10px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
