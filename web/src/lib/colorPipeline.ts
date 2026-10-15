@@ -12,13 +12,19 @@ void main() {
 /**
  * 调色管线(预览与导出共用同一套 shader)。
  *
- * 设计要点:
- *  1. **曝光 / 白平衡在线性光里做**(sRGB 是 gamma 编码,直接乘会偏色发灰);
- *  2. **高光/阴影/白/黑用乘性分区**(加性会把画面推向中灰、漂白);
- *  3. **对比度用 S 曲线**(自带高光/暗部滚降,提反差也不炸高光);
- *  4. **参数全为零时严格等于原图**(`u_identity`);
- *  5. **只用标量函数 + 三元表达式**写 GLSL —— 避开部分驱动对 vec3 重载
- *     (`max(vec3,float)` / `mix(vec3,vec3,vec3)`)支持不佳导致的编译失败。
+ * 相比早期版本的几处**关键升级**(都是「显丑」的根源):
+ *  1. **亮度域 filmic 色调曲线**:把曝光、对比、高光、阴影、白、黑统一到
+ *     「以中灰 0.18 为原点的 log2 亮度」上做位移与拉伸,高光再过一道**软肩**
+ *     (shoulder)→ 提反差/提亮时高光是**平滑压回**而不是断崖剪裁。
+ *  2. **OKLab 彩度**:饱和/自然饱和度在感知均匀空间里缩放色度(a,b),
+ *     只改彩度、不动色相,并避免 RGB 混亮带来的过冲偏色。
+ *  3. **色域软限位**:超出 [0,1] 时先整体回缩、再朝亮度去饱和,
+ *     而不是末尾硬 `clamp`(硬夹会直接改色相)。
+ *  4. **9 抽头模糊 + 限幅锐化**:锐化/清晰度用 3x3 高斯差分,并压低强度,
+ *     少出白边光晕。
+ *  5. **参数全为零时严格等于原图**(`u_identity`)。
+ *
+ * 全部用标量函数 + 三元表达式书写,避开部分驱动对 vec3 重载支持不佳的问题。
  */
 function fragSrc(precision: string): string {
   return `
@@ -44,7 +50,7 @@ uniform float u_vignette;
 
 float luma(vec3 c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; }
 
-/* sRGB <-> 线性光(逐通道标量,最保守的写法) */
+/* sRGB <-> 线性光(逐通道标量) */
 float s2l(float v) { return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); }
 float l2s(float v) {
   float x = v < 0.0 ? 0.0 : v;
@@ -53,79 +59,122 @@ float l2s(float v) {
 vec3 s2l3(vec3 c) { return vec3(s2l(c.r), s2l(c.g), s2l(c.b)); }
 vec3 l2s3(vec3 c) { return vec3(l2s(c.r), l2s(c.g), l2s(c.b)); }
 
-/* 5 抽头十字模糊(降噪 / 清晰度 / 锐化的差分) */
-vec3 blur3(vec2 uv) {
-  vec3 s = texture2D(u_image, uv).rgb * 0.3333333;
-  s += texture2D(u_image, uv + vec2(u_texel.x, 0.0)).rgb * 0.1666667;
-  s += texture2D(u_image, uv - vec2(u_texel.x, 0.0)).rgb * 0.1666667;
-  s += texture2D(u_image, uv + vec2(0.0, u_texel.y)).rgb * 0.1666667;
-  s += texture2D(u_image, uv - vec2(0.0, u_texel.y)).rgb * 0.1666667;
+/* 线性 sRGB <-> OKLab(感知均匀,用于只改彩度不偏色) */
+vec3 lin2oklab(vec3 c) {
+  float l = 0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b;
+  float m = 0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b;
+  float s = 0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b;
+  float l_ = pow(max(l, 0.0), 0.3333333);
+  float m_ = pow(max(m, 0.0), 0.3333333);
+  float s_ = pow(max(s, 0.0), 0.3333333);
+  return vec3(
+    0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+    1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+    0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_);
+}
+vec3 oklab2lin(vec3 lab) {
+  float l_ = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
+  float m_ = lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z;
+  float s_ = lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z;
+  float l = l_ * l_ * l_;
+  float m = m_ * m_ * m_;
+  float s = s_ * s_ * s_;
+  return vec3(
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s);
+}
+
+/* 3x3 高斯(9 抽头),用于降噪 / 清晰度 / 锐化的差分 */
+vec3 blur9(vec2 uv) {
+  vec3 s = texture2D(u_image, uv).rgb * 0.25;
+  s += texture2D(u_image, uv + vec2(u_texel.x, 0.0)).rgb * 0.125;
+  s += texture2D(u_image, uv - vec2(u_texel.x, 0.0)).rgb * 0.125;
+  s += texture2D(u_image, uv + vec2(0.0, u_texel.y)).rgb * 0.125;
+  s += texture2D(u_image, uv - vec2(0.0, u_texel.y)).rgb * 0.125;
+  s += texture2D(u_image, uv + u_texel).rgb * 0.0625;
+  s += texture2D(u_image, uv - u_texel).rgb * 0.0625;
+  s += texture2D(u_image, uv + vec2(u_texel.x, -u_texel.y)).rgb * 0.0625;
+  s += texture2D(u_image, uv + vec2(-u_texel.x, u_texel.y)).rgb * 0.0625;
   return s;
 }
 
+/* 软肩:x<=knee 恒等,x>knee 平滑压向 1(高光滚降,永不断崖) */
+float shoulder(float x, float knee) {
+  return x <= knee ? x : knee + (1.0 - knee) * (1.0 - exp(-(x - knee) / max(1.0 - knee, 1e-4)));
+}
+
+/* 高斯权重(自己平方,避免 pow(负数)) */
+float gw(float d, float c, float s) {
+  float t = (d - c) / s;
+  return exp(-t * t);
+}
+
 void main() {
-  vec3 c = texture2D(u_image, v_uv).rgb;
-  vec3 outC = c;
+  vec3 src = texture2D(u_image, v_uv).rgb;
+  vec3 outC = src;
 
   if (u_identity < 0.5) {
-    if (u_denoise > 0.001) c = mix(c, blur3(v_uv), u_denoise * 0.8);
+    /* ---- 1. 线性光:降噪 → 白平衡 → 曝光 ---- */
+    vec3 c = src;
+    if (u_denoise > 0.001) c = mix(c, blur9(v_uv), u_denoise * 0.7);
 
-    /* ---- 线性光:白平衡 + 曝光 ---- */
     vec3 lin = s2l3(c);
     float t = u_temperature;
     float ti = u_tint;
-    lin.r *= 1.0 + t * 0.32 + ti * 0.06;
-    lin.b *= 1.0 - t * 0.32 + ti * 0.06;
-    lin.g *= 1.0 - ti * 0.22;
-    lin *= pow(2.0, u_exposure * 1.5);   /* u_exposure 已在 JS 里 /100(±1),故 ±1.5 EV */
+    lin.r *= 1.0 + t * 0.30 + ti * 0.06;
+    lin.b *= 1.0 - t * 0.30 + ti * 0.06;
+    lin.g *= 1.0 - ti * 0.20;
+    lin *= pow(2.0, u_exposure * 1.4);   /* u_exposure 已在 JS 里 /100(±1)→ ±1.4EV */
 
-    /* ---- 感知空间:乘性明暗分区 ---- */
+    /* ---- 2. 亮度域色调曲线(以中灰 0.18 为原点的 log2 亮度)---- */
+    float l = max(luma(lin), 1e-4);
+    float mid = -2.4739312;              /* log2(0.18) */
+    float d = log2(l) - mid;             /* 相对中灰的曝光级数(stops) */
+
+    float wSh = gw(d, -2.2, 1.5);
+    float wHi = gw(d, 1.6, 1.5);
+    float wBl = gw(d, -3.4, 1.0);
+    float wWh = gw(d, 2.8, 1.0);
+
+    float dd = d;
+    dd += u_shadows * 0.75 * wSh;
+    dd += u_highlights * 0.75 * wHi;     /* 高光取负 = 压高光 */
+    dd += u_blacks * 0.75 * wBl;         /* 黑取负 = 压暗黑场 */
+    dd += u_whites * 0.75 * wWh;
+    dd *= 1.0 + u_contrast * 0.7;        /* 对比 = log 域拉伸 */
+
+    float l2 = shoulder(pow(2.0, mid + dd), 0.82);
+    lin *= l2 / l;
+
+    /* ---- 3. OKLab 彩度:只改彩度、不动色相 ---- */
+    vec3 lab = lin2oklab(lin);
+    float chroma = length(lab.yz);
+    float vibK = 1.0 + u_vibrance * max(0.0, 1.0 - chroma / 0.22) * 0.9;
+    lab.yz *= (1.0 + u_saturation) * vibK;
+    lin = oklab2lin(lab);
+
+    /* ---- 4. 色域软限位(超界先回缩,再朝亮度去饱和)---- */
+    float mx = max(lin.r, max(lin.g, lin.b));
+    if (mx > 1.0) lin *= shoulder(mx, 0.9) / mx;
+    float mn = min(lin.r, min(lin.g, lin.b));
+    float gy = luma(lin);
+    if (mn < 0.0 && gy > 1e-5) lin = mix(vec3(gy, gy, gy), lin, clamp(gy / (gy - mn), 0.0, 1.0));
+
+    /* ---- 5. 回显示空间:清晰度 / 锐化 / 暗角 ---- */
     vec3 p = l2s3(lin);
-    float l = luma(p);
-    float mh = smoothstep(0.45, 1.00, l);
-    float ms = 1.0 - smoothstep(0.00, 0.55, l);
-    float mw = smoothstep(0.70, 1.00, l);
-    float mb = 1.0 - smoothstep(0.00, 0.30, l);
-    p *= 1.0 + u_highlights * 0.45 * mh;
-    p *= 1.0 + u_shadows * 0.55 * ms;
-    p *= 1.0 + u_whites * 0.30 * mw;
-    p *= 1.0 + u_blacks * 0.60 * mb;
-
-    /* ---- 对比度:S 曲线 ---- */
-    float kc = u_contrast;
-    if (kc > 0.0) {
-      vec3 s = p * p * (3.0 - 2.0 * p);
-      float a = kc > 1.0 ? 1.0 : kc;
-      p = mix(p, s, a * 0.92);
-    } else {
-      float a = kc < -1.0 ? 1.0 : -kc;
-      p = mix(p, vec3(0.5, 0.5, 0.5) + (p - vec3(0.5, 0.5, 0.5)) * 0.62, a);
-    }
-
-    /* ---- 清晰度 + 锐化 ---- */
     float kcl = u_clarity;
     float ksh = u_sharpen;
     if (kcl > 0.001 || kcl < -0.001 || ksh > 0.001) {
-      vec3 detail = p - blur3(v_uv);
-      float mid = 1.0 - abs(2.0 * luma(p) - 1.0);
-      p += detail * (kcl * 1.5 * (0.35 + 0.65 * mid) + ksh * 1.15);
+      vec3 detail = p - blur9(v_uv);
+      float mid2 = 1.0 - abs(2.0 * luma(p) - 1.0);
+      p += detail * (kcl * 1.1 * (0.3 + 0.7 * mid2) + ksh * 0.75);
     }
 
-    /* ---- 饱和度 + 自然饱和度 ---- */
-    float lum = luma(p);
-    p = mix(vec3(lum, lum, lum), p, 1.0 + u_saturation);
-    float mx = max(p.r, max(p.g, p.b));
-    float mn = min(p.r, min(p.g, p.b));
-    float sat = mx - mn;
-    float vk = 1.0 + u_vibrance * (1.0 - sat) * 1.3;
-    float lum2 = luma(p);
-    p = mix(vec3(lum2, lum2, lum2), p, vk);
-
-    /* ---- 暗角 ---- */
     if (u_vignette > 0.001 || u_vignette < -0.001) {
-      vec2 d = v_uv - vec2(0.5, 0.5);
-      float r = length(d) * 1.4142136;
-      p *= 1.0 + smoothstep(0.45, 1.1, r) * u_vignette * 0.85;
+      vec2 dv = v_uv - vec2(0.5, 0.5);
+      float rr = length(dv) * 1.4142136;
+      p *= 1.0 + smoothstep(0.5, 1.15, rr) * u_vignette * 0.7;
     }
 
     outC = p;
@@ -266,24 +315,6 @@ export class ColorRenderer {
     gl.attachShader(prog, fs)
     gl.linkProgram(prog)
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      if (graded) {
-        // 链接失败:再试一次直通,尽量保证能显示
-        const pt = compile(gl, gl.FRAGMENT_SHADER, passthroughSrc(prec)).shader
-        if (pt) {
-          const p2 = gl.createProgram()
-          if (p2) {
-            gl.attachShader(p2, vs)
-            gl.attachShader(p2, pt)
-            gl.linkProgram(p2)
-            if (gl.getProgramParameter(p2, gl.LINK_STATUS)) {
-              this.graded = false
-              this.errorLog = log || '调色程序链接失败'
-              this.finishInit(gl, p2)
-              return
-            }
-          }
-        }
-      }
       return
     }
 

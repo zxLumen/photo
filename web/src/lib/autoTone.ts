@@ -160,7 +160,17 @@ export function computeAutoTone(data: Uint8ClampedArray, width: number, height: 
  *  - 对比 / 高光 / 阴影 / 鲜艳度 / 清晰度等是**审美取向** → 以模型为主(w=0.4);
  *  - 两边都没有的值保持不变;越界一律夹紧。
  */
-const MEASURE_WEIGHT: Partial<Record<keyof ToneParams, number>> = { exposure: 0.7, temperature: 0.7, tint: 0.7 }
+/** 每个参数「听 AI 多少」(0=完全听直方图,1=完全听模型) */
+const AI_WEIGHT: Partial<Record<keyof ToneParams, number>> = {
+  exposure: 0.3,
+  temperature: 0.3,
+  tint: 0.3, // 测量问题,以算法为准
+  sharpen: 0.3,
+  vignette: 0.3,
+  denoise: 0.3, // 容易过火,压低模型权重
+}
+/** 上限:避免「一眼假」的重口味(正值取 min,负值取 max) */
+const TONE_CAP: Partial<Record<keyof ToneParams, number>> = { sharpen: 22, denoise: 14, vignette: -18 }
 
 export function blendTone(measured: ToneParams, ai: Partial<ToneParams> | null | undefined): ToneParams {
   const out = { ...measured }
@@ -168,8 +178,10 @@ export function blendTone(measured: ToneParams, ai: Partial<ToneParams> | null |
   for (const k of Object.keys(TONE_LIMITS) as (keyof ToneParams)[]) {
     const a = ai[k]
     if (typeof a !== 'number' || !Number.isFinite(a)) continue
-    const w = MEASURE_WEIGHT[k] ?? 0.4
-    const v = measured[k] * w + a * (1 - w)
+    const w = AI_WEIGHT[k] ?? 0.55
+    let v = measured[k] * (1 - w) + a * w
+    const cap = TONE_CAP[k]
+    if (cap !== undefined) v = cap > 0 ? Math.min(v, cap) : Math.max(v, cap)
     out[k] = Math.round(clamp(v, TONE_LIMITS[k].min, TONE_LIMITS[k].max))
   }
   return out
