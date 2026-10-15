@@ -13,6 +13,8 @@ import { WorksPanel } from './components/WorksPanel.js'
 import { SettingsPanel, type SettingsData as SettingsDataT } from './components/SettingsPanel.js'
 import { ExportDialog } from './components/ExportDialog.js'
 import { Uploader } from './components/Uploader.js'
+import { SampleGallery } from './components/SampleGallery.js'
+import { detectColorSupport } from './lib/colorPipeline.js'
 
 type Tab = 'compose' | 'adjust' | 'works'
 
@@ -40,6 +42,8 @@ export function App() {
   const [settings, setSettings] = useState<SettingsDataT | null>(null)
   const [compare, setCompare] = useState(false)
   const [holdOriginal, setHoldOriginal] = useState(false)
+  const [showSamples, setShowSamples] = useState(false)
+  const [colorWarn, setColorWarn] = useState('')
 
   const restoredRef = useRef(false)
   const statusRef = useRef<StatusInfo | null>(null)
@@ -58,6 +62,16 @@ export function App() {
       .catch(() => {})
     refreshSessions()
     refreshPresets()
+  }, [])
+
+  // 调色支持自检:WebGL 不可用 / 调色 shader 编译失败时明确提示(不再静默失效)
+  useEffect(() => {
+    const s = detectColorSupport()
+    if (!s.webgl) {
+      setColorWarn('当前浏览器未启用 WebGL:可以裁剪,但「调色」无法预览与导出。建议用新版 Chrome / Edge / Safari。')
+    } else if (!s.graded) {
+      setColorWarn(`当前浏览器未能启用调色预览(已降级为只显示原图):${s.log.slice(0, 180)}`)
+    }
   }, [])
 
   useEffect(() => {
@@ -291,6 +305,8 @@ export function App() {
   /* ---------------- 渲染 ---------------- */
 
   const hasImage = !!image
+  // AI 检出的倾斜角:优先用 horizon,其次用 rotate(模型给出的整体摆正角)
+  const aiRotate = analysis?.horizon?.angle ?? analysis?.rotate ?? 0
 
   return (
     <div className="app">
@@ -301,6 +317,9 @@ export function App() {
           <span className="brand-sub">构图裁剪 · 自动修图</span>
         </div>
         <div className="top-actions">
+          <button type="button" className="btn small ghost" onClick={() => setShowSamples(true)} title="内置「待修图」示例,一键载入体验">
+            示例
+          </button>
           {hasImage && (
             <>
               <button type="button" className="btn small" onClick={() => setTab('adjust')}>
@@ -328,6 +347,14 @@ export function App() {
       {!status?.hasToken && (
         <div className="banner warn">
           尚未配置视觉模型令牌{status?.isOwner ? ':点右上「设置」填入,或让主站签发应用令牌' : ':请联系站长在后台配置'}。
+        </div>
+      )}
+      {colorWarn && (
+        <div className="banner err">
+          <span>⚠️ {colorWarn}</span>
+          <button type="button" className="icon-btn" onClick={() => setColorWarn('')}>
+            ✕
+          </button>
         </div>
       )}
       {error && (
@@ -382,7 +409,7 @@ export function App() {
                     按住看原图
                   </button>
                 )}
-                <label className="slider mini">
+                <label className="slider mini" title="手动微调旋转角:直接拖动滑块(这是个滑块,不是按钮)">
                   <span className="slider-label">摆正</span>
                   <input type="range" min={-15} max={15} step={0.1} value={rotate} onChange={(e) => setRotate(Number(e.target.value))} />
                   <span className="slider-val">{rotate.toFixed(1)}°</span>
@@ -390,10 +417,11 @@ export function App() {
                 <button
                   type="button"
                   className="btn small ghost"
-                  onClick={() => setRotate(analysis?.horizon?.angle ?? 0)}
-                  disabled={!analysis?.horizon}
+                  onClick={() => setRotate(aiRotate)}
+                  disabled={!analysis || Math.abs(aiRotate) < 0.05}
+                  title={analysis ? `AI 检出的倾斜角:${aiRotate.toFixed(1)}°,点击一键回正` : '先点「一键构图」,AI 会同时判断并摆正倾斜'}
                 >
-                  按地平线摆正
+                  AI 摆正{analysis && Math.abs(aiRotate) >= 0.05 ? ` ${aiRotate > 0 ? '+' : ''}${aiRotate.toFixed(1)}°` : ''}
                 </button>
                 <button type="button" className="btn small ghost" onClick={() => setCrop({ x: 0, y: 0, w: 1, h: 1 })}>
                   重置裁剪
@@ -507,6 +535,25 @@ export function App() {
 
       {showExport && image && (
         <ExportDialog image={image} rotate={rotate} crop={crop} tone={tone} fileBase={fileName || 'photo'} onClose={() => setShowExport(false)} />
+      )}
+
+      {showSamples && (
+        <div className="modal-mask" onClick={() => setShowSamples(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">示例照片(待修图)</div>
+            <SampleGallery
+              onPick={(f) => {
+                setShowSamples(false)
+                void loadFile(f)
+              }}
+            />
+            <div className="row2 end" style={{ marginTop: 12 }}>
+              <button type="button" className="btn" onClick={() => setShowSamples(false)}>
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showSettings && (

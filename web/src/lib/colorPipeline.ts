@@ -10,20 +10,19 @@ void main() {
 `
 
 /**
- * 调色管线(预览与导出共用同一套 shader,保证「所见即所得」)。
+ * 调色管线(预览与导出共用同一套 shader)。
  *
- * 设计要点(相对早期版本的关键改进):
- *  1. **曝光 / 白平衡在线性光里做** —— sRGB 是 gamma 编码的,直接乘会偏色、发灰;
- *     先解码到线性、调完再编码回去,颜色才准。
- *  2. **明暗分区(高光/阴影/白/黑)用「乘性」而非「加性」** —— 加性会把画面推向
- *     中灰、发白(所谓「漂白」),乘性只按亮度分区缩放,不会污染整体。
- *  3. **对比度用 S 曲线** —— smoothstep 天然在两端压平,等于自带高光/暗部滚降,
- *     提反差的同时不炸高光。
- *  4. **参数全为零时严格等于原图** —— `u_identity` 直接输出采样色,保证「修前」
- *     对照是真正的原始画面,且调节过程中不会出现跳变。
+ * 设计要点:
+ *  1. **曝光 / 白平衡在线性光里做**(sRGB 是 gamma 编码,直接乘会偏色发灰);
+ *  2. **高光/阴影/白/黑用乘性分区**(加性会把画面推向中灰、漂白);
+ *  3. **对比度用 S 曲线**(自带高光/暗部滚降,提反差也不炸高光);
+ *  4. **参数全为零时严格等于原图**(`u_identity`);
+ *  5. **只用标量函数 + 三元表达式**写 GLSL —— 避开部分驱动对 vec3 重载
+ *     (`max(vec3,float)` / `mix(vec3,vec3,vec3)`)支持不佳导致的编译失败。
  */
-const FRAG = `
-precision highp float;
+function fragSrc(precision: string): string {
+  return `
+precision ${precision} float;
 varying vec2 v_uv;
 uniform sampler2D u_image;
 uniform vec2 u_texel;
@@ -43,24 +42,18 @@ uniform float u_sharpen;
 uniform float u_denoise;
 uniform float u_vignette;
 
-const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+float luma(vec3 c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; }
 
-float luma(vec3 c) { return dot(c, LUMA); }
-
-/* sRGB <-> 线性光 */
-vec3 srgb2lin(vec3 c) {
-  vec3 lo = c / 12.92;
-  vec3 hi = pow(max(c + 0.055, 0.0) / 1.055, vec3(2.4));
-  return mix(lo, hi, step(vec3(0.04045), c));
+/* sRGB <-> 线性光(逐通道标量,最保守的写法) */
+float s2l(float v) { return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); }
+float l2s(float v) {
+  float x = v < 0.0 ? 0.0 : v;
+  return x <= 0.0031308 ? x * 12.92 : 1.055 * pow(x, 0.41666667) - 0.055;
 }
-vec3 lin2srgb(vec3 c) {
-  c = max(c, 0.0);
-  vec3 lo = c * 12.92;
-  vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
-  return mix(lo, hi, step(vec3(0.0031308), c));
-}
+vec3 s2l3(vec3 c) { return vec3(s2l(c.r), s2l(c.g), s2l(c.b)); }
+vec3 l2s3(vec3 c) { return vec3(l2s(c.r), l2s(c.g), l2s(c.b)); }
 
-/* 5 抽头十字模糊(用于降噪 / 清晰度 / 锐化的差分) */
+/* 5 抽头十字模糊(降噪 / 清晰度 / 锐化的差分) */
 vec3 blur3(vec2 uv) {
   vec3 s = texture2D(u_image, uv).rgb * 0.3333333;
   s += texture2D(u_image, uv + vec2(u_texel.x, 0.0)).rgb * 0.1666667;
@@ -72,95 +65,98 @@ vec3 blur3(vec2 uv) {
 
 void main() {
   vec3 c = texture2D(u_image, v_uv).rgb;
+  vec3 outC = c;
 
-  // 无任何调整 → 原样输出(保证「修前」对照精确,也省一次完整计算)
-  if (u_identity > 0.5) {
-    gl_FragColor = vec4(c, 1.0);
-    return;
+  if (u_identity < 0.5) {
+    if (u_denoise > 0.001) c = mix(c, blur3(v_uv), u_denoise * 0.8);
+
+    /* ---- 线性光:白平衡 + 曝光 ---- */
+    vec3 lin = s2l3(c);
+    float t = u_temperature;
+    float ti = u_tint;
+    lin.r *= 1.0 + t * 0.32 + ti * 0.06;
+    lin.b *= 1.0 - t * 0.32 + ti * 0.06;
+    lin.g *= 1.0 - ti * 0.22;
+    lin *= pow(2.0, u_exposure * 1.5);   /* u_exposure 已在 JS 里 /100(±1),故 ±1.5 EV */
+
+    /* ---- 感知空间:乘性明暗分区 ---- */
+    vec3 p = l2s3(lin);
+    float l = luma(p);
+    float mh = smoothstep(0.45, 1.00, l);
+    float ms = 1.0 - smoothstep(0.00, 0.55, l);
+    float mw = smoothstep(0.70, 1.00, l);
+    float mb = 1.0 - smoothstep(0.00, 0.30, l);
+    p *= 1.0 + u_highlights * 0.45 * mh;
+    p *= 1.0 + u_shadows * 0.55 * ms;
+    p *= 1.0 + u_whites * 0.30 * mw;
+    p *= 1.0 + u_blacks * 0.60 * mb;
+
+    /* ---- 对比度:S 曲线 ---- */
+    float kc = u_contrast;
+    if (kc > 0.0) {
+      vec3 s = p * p * (3.0 - 2.0 * p);
+      float a = kc > 1.0 ? 1.0 : kc;
+      p = mix(p, s, a * 0.92);
+    } else {
+      float a = kc < -1.0 ? 1.0 : -kc;
+      p = mix(p, vec3(0.5, 0.5, 0.5) + (p - vec3(0.5, 0.5, 0.5)) * 0.62, a);
+    }
+
+    /* ---- 清晰度 + 锐化 ---- */
+    float kcl = u_clarity;
+    float ksh = u_sharpen;
+    if (kcl > 0.001 || kcl < -0.001 || ksh > 0.001) {
+      vec3 detail = p - blur3(v_uv);
+      float mid = 1.0 - abs(2.0 * luma(p) - 1.0);
+      p += detail * (kcl * 1.5 * (0.35 + 0.65 * mid) + ksh * 1.15);
+    }
+
+    /* ---- 饱和度 + 自然饱和度 ---- */
+    float lum = luma(p);
+    p = mix(vec3(lum, lum, lum), p, 1.0 + u_saturation);
+    float mx = max(p.r, max(p.g, p.b));
+    float mn = min(p.r, min(p.g, p.b));
+    float sat = mx - mn;
+    float vk = 1.0 + u_vibrance * (1.0 - sat) * 1.3;
+    float lum2 = luma(p);
+    p = mix(vec3(lum2, lum2, lum2), p, vk);
+
+    /* ---- 暗角 ---- */
+    if (u_vignette > 0.001 || u_vignette < -0.001) {
+      vec2 d = v_uv - vec2(0.5, 0.5);
+      float r = length(d) * 1.4142136;
+      p *= 1.0 + smoothstep(0.45, 1.1, r) * u_vignette * 0.85;
+    }
+
+    outC = p;
   }
 
-  // 降噪(感知空间,轻度)
-  if (u_denoise > 0.001) c = mix(c, blur3(v_uv), u_denoise / 100.0 * 0.8);
-
-  // ---- 线性光:白平衡 + 曝光 ----
-  vec3 lin = srgb2lin(c);
-
-  float t = u_temperature / 100.0;
-  float ti = u_tint / 100.0;
-  lin.r *= 1.0 + t * 0.32 + ti * 0.06;
-  lin.b *= 1.0 - t * 0.32 + ti * 0.06;
-  lin.g *= 1.0 - ti * 0.22;
-
-  lin *= exp2(u_exposure / 100.0 * 1.5);   // ±1.5 EV
-
-  // ---- 回到感知空间,做乘性明暗分区 ----
-  vec3 p = lin2srgb(lin);
-  float l = luma(p);
-
-  float mh = smoothstep(0.45, 1.00, l);      // 高光
-  float ms = 1.0 - smoothstep(0.00, 0.55, l); // 阴影
-  float mw = smoothstep(0.70, 1.00, l);      // 白场
-  float mb = 1.0 - smoothstep(0.00, 0.30, l); // 黑场
-
-  p *= 1.0 + (u_highlights / 100.0) * 0.45 * mh;
-  p *= 1.0 + (u_shadows / 100.0) * 0.55 * ms;
-  p *= 1.0 + (u_whites / 100.0) * 0.30 * mw;
-  p *= 1.0 + (u_blacks / 100.0) * 0.60 * mb;
-
-  // 对比度:S 曲线
-  float kc = u_contrast / 100.0;
-  if (kc > 0.0) {
-    vec3 s = p * p * (3.0 - 2.0 * p);
-    p = mix(p, s, min(kc, 1.0) * 0.92);
-  } else if (kc < 0.0) {
-    p = mix(p, 0.5 + (p - 0.5) * 0.62, min(-kc, 1.0));
-  }
-
-  // 清晰度(中间调局部对比)+ 锐化(细节)
-  float kcl = u_clarity / 100.0;
-  float ksh = u_sharpen / 100.0;
-  if (abs(kcl) > 0.001 || ksh > 0.001) {
-    vec3 detail = p - blur3(v_uv);
-    float mid = 1.0 - abs(2.0 * luma(p) - 1.0);
-    p += detail * (kcl * 1.5 * (0.35 + 0.65 * mid) + ksh * 1.15);
-  }
-
-  // 饱和度 + 自然饱和度
-  p = mix(vec3(luma(p)), p, 1.0 + u_saturation / 100.0);
-  float mx = max(p.r, max(p.g, p.b));
-  float mn = min(p.r, min(p.g, p.b));
-  float sat = clamp(mx - mn, 0.0, 1.0);
-  p = mix(vec3(luma(p)), p, 1.0 + (u_vibrance / 100.0) * (1.0 - sat) * 1.3);
-
-  // 暗角
-  if (abs(u_vignette) > 0.001) {
-    vec2 d = v_uv - 0.5;
-    float r = length(d) * 1.4142136;
-    p *= 1.0 + smoothstep(0.45, 1.1, r) * (u_vignette / 100.0) * 0.85;
-  }
-
-  gl_FragColor = vec4(clamp(p, 0.0, 1.0), 1.0);
+  gl_FragColor = vec4(clamp(outC, 0.0, 1.0), 1.0);
 }
 `
+}
 
-/** 调色 shader 编译/链接失败时的兜底:只把纹理画出来(不调色),保证不黑屏 */
-const PASSTHROUGH_FRAG = `
-precision highp float;
+/** 调色 shader 失败时的兜底:只把纹理画出来(不调色) */
+function passthroughSrc(precision: string): string {
+  return `
+precision ${precision} float;
 varying vec2 v_uv;
 uniform sampler2D u_image;
 void main() { gl_FragColor = texture2D(u_image, v_uv); }
 `
+}
 
-function compile(gl: WebGLRenderingContext, type: number, src: string): WebGLShader | null {
+function compile(gl: WebGLRenderingContext, type: number, src: string): { shader: WebGLShader | null; log: string } {
   const sh = gl.createShader(type)
-  if (!sh) return null
+  if (!sh) return { shader: null, log: 'createShader 失败' }
   gl.shaderSource(sh, src)
   gl.compileShader(sh)
   if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(sh) || '未知编译错误'
     gl.deleteShader(sh)
-    return null
+    return { shader: null, log }
   }
-  return sh
+  return { shader: sh, log: '' }
 }
 
 const UNIFORM_NAMES = [
@@ -206,14 +202,34 @@ function isIdentity(tone: ToneParams): boolean {
   return true
 }
 
+/** 片元着色器精度:优先 highp,不支持则退回 mediump(部分老设备/移动 GPU) */
+function fragPrecision(gl: WebGLRenderingContext): string {
+  try {
+    const f = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT)
+    if (f && f.precision > 0) return 'highp'
+  } catch {
+    /* ignore */
+  }
+  return 'mediump'
+}
+
+export interface ColorSupport {
+  webgl: boolean
+  /** 能否真正调色(false = 只能显示原图,调色不可用) */
+  graded: boolean
+  /** 编译失败时的驱动日志(用于排查) */
+  log: string
+}
+
 /**
  * 基于 WebGL 的实时调色管线(非破坏,预览与导出共用同一套 shader)。
  * 不可用时 `supported=false`,调用方退回「仅几何、不调色」。
  */
 export class ColorRenderer {
-  readonly supported: boolean
+  supported: boolean
   /** 调色 shader 是否可用(不可用则只显示原图) */
-  private graded = false
+  graded: boolean
+  readonly errorLog: string
   private gl: WebGLRenderingContext | null = null
   private program: WebGLProgram | null = null
   private texture: WebGLTexture | null = null
@@ -221,38 +237,62 @@ export class ColorRenderer {
   private u: Partial<Record<(typeof UNIFORM_NAMES)[number], WebGLUniformLocation | null>> = {}
 
   constructor(private canvas: HTMLCanvasElement) {
+    this.supported = false
+    this.graded = false
+    this.errorLog = ''
+
     const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true, premultipliedAlpha: false, antialias: false }) as WebGLRenderingContext | null
-    if (!gl) {
-      this.supported = false
-      return
-    }
+    if (!gl) return
     this.gl = gl
-    const vs = compile(gl, gl.VERTEX_SHADER, VERT)
-    if (!vs) {
-      this.supported = false
-      return
+
+    const prec = fragPrecision(gl)
+    const vs = compile(gl, gl.VERTEX_SHADER, VERT).shader
+    if (!vs) return
+
+    // 先试完整调色 shader;失败退回直通(只显示、不调色),避免整片黑屏。
+    let log = ''
+    let fsRes = compile(gl, gl.FRAGMENT_SHADER, fragSrc(prec))
+    let graded = !!fsRes.shader
+    if (!graded) {
+      log = fsRes.log
+      fsRes = compile(gl, gl.FRAGMENT_SHADER, passthroughSrc(prec))
     }
-    // 优先用完整调色 shader;失败则退回「只显示、不调色」的直通 shader ——
-    // 因为 canvas 一旦绑定了 WebGL 上下文就无法再取 2D 上下文,调用方的 2D 兜底会失效而整片黑屏。
-    let fs = compile(gl, gl.FRAGMENT_SHADER, FRAG)
-    this.graded = !!fs
-    if (!fs) fs = compile(gl, gl.FRAGMENT_SHADER, PASSTHROUGH_FRAG)
-    if (!fs) {
-      this.supported = false
-      return
-    }
+    const fs = fsRes.shader
+    if (!fs) return
+
     const prog = gl.createProgram()
-    if (!prog) {
-      this.supported = false
-      return
-    }
+    if (!prog) return
     gl.attachShader(prog, vs)
     gl.attachShader(prog, fs)
     gl.linkProgram(prog)
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      this.supported = false
+      if (graded) {
+        // 链接失败:再试一次直通,尽量保证能显示
+        const pt = compile(gl, gl.FRAGMENT_SHADER, passthroughSrc(prec)).shader
+        if (pt) {
+          const p2 = gl.createProgram()
+          if (p2) {
+            gl.attachShader(p2, vs)
+            gl.attachShader(p2, pt)
+            gl.linkProgram(p2)
+            if (gl.getProgramParameter(p2, gl.LINK_STATUS)) {
+              this.graded = false
+              this.errorLog = log || '调色程序链接失败'
+              this.finishInit(gl, p2)
+              return
+            }
+          }
+        }
+      }
       return
     }
+
+    this.graded = graded
+    this.errorLog = graded ? '' : log || '调色 shader 不可用'
+    this.finishInit(gl, prog)
+  }
+
+  private finishInit(gl: WebGLRenderingContext, prog: WebGLProgram): void {
     this.program = prog
     gl.useProgram(prog)
 
@@ -280,6 +320,7 @@ export class ColorRenderer {
   setSource(source: TexImageSource, width: number, height: number): void {
     const gl = this.gl
     if (!gl || !this.texture) return
+    if (this.program) gl.useProgram(this.program)
     this.canvas.width = width
     this.canvas.height = height
     gl.viewport(0, 0, width, height)
@@ -292,9 +333,9 @@ export class ColorRenderer {
   render(tone: ToneParams): void {
     const gl = this.gl
     if (!gl || !this.program) return
-    const g = (v: number) => v / 100
     gl.useProgram(this.program)
     if (this.graded) {
+      const g = (v: number) => v / 100
       gl.uniform1f(this.u.u_identity ?? null, isIdentity(tone) ? 1 : 0)
       gl.uniform1f(this.u.u_exposure ?? null, g(tone.exposure))
       gl.uniform1f(this.u.u_contrast ?? null, g(tone.contrast))
@@ -321,4 +362,16 @@ export class ColorRenderer {
     if (this.buf) gl.deleteBuffer(this.buf)
     if (this.program) gl.deleteProgram(this.program)
   }
+}
+
+/** 探测当前浏览器是否能启用调色(离屏试编译一次,拿到驱动日志) */
+export function detectColorSupport(): ColorSupport {
+  if (typeof document === 'undefined') return { webgl: false, graded: false, log: '' }
+  const canvas = document.createElement('canvas')
+  canvas.width = 4
+  canvas.height = 4
+  const r = new ColorRenderer(canvas)
+  const out: ColorSupport = { webgl: r.supported, graded: r.graded, log: r.errorLog }
+  r.dispose()
+  return out
 }

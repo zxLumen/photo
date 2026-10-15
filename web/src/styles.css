@@ -646,6 +646,20 @@ input[type='range']::-moz-range-thumb {
   font-size: 11px;
   color: #5c6478;
 }
+.samples-err {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--danger);
+}
+/* 弹窗里的示例:窄一些,3 列 */
+.modal .samples {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.modal .samples-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
 
 /* ---------------- 前后对比 ---------------- */
 .compare-wrap {
