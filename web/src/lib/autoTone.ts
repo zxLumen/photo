@@ -56,6 +56,10 @@ export function computeAutoTone(data: Uint8ClampedArray, width: number, height: 
   let lSum = 0
   let l2Sum = 0
   let clipped = 0
+  let nR = 0
+  let nG = 0
+  let nB = 0
+  let nCount = 0
   for (let i = 0; i < n; i++) {
     const r = data[i * 4]
     const g = data[i * 4 + 1]
@@ -68,6 +72,15 @@ export function computeAutoTone(data: Uint8ClampedArray, width: number, height: 
     lSum += l
     l2Sum += l * l
     if (l > 0.985) clipped += 1
+    // 只统计「接近中性」的低饱和像素做白平衡参考,避免把夕阳 / 夜景这类
+    // 刻意的强色偏当成白平衡错误而强行「纠」掉
+    const chroma = (Math.max(r, Math.max(g, b)) - Math.min(r, Math.min(g, b))) / 255
+    if (chroma < 0.12) {
+      nR += r
+      nG += g
+      nB += b
+      nCount += 1
+    }
   }
   const meanL = lSum / n
   const stdL = Math.sqrt(Math.max(0, l2Sum / n - meanL * meanL))
@@ -86,12 +99,16 @@ export function computeAutoTone(data: Uint8ClampedArray, width: number, height: 
   const median = percentile(0.5)
   const white = percentile(0.996)
 
-  const rAvg = rs / n
-  const gAvg = gs / n
-  const bAvg = bs / n
+  // 白平衡参考:优先用「中性像素」,中性像素太少(如整体很艳)才退回全图均值
+  const useNeutral = nCount > n * 0.04
+  const rRef = (useNeutral ? nR / nCount : rs / n) / 255
+  const gRef = (useNeutral ? nG / nCount : gs / n) / 255
+  const bRef = (useNeutral ? nB / nCount : bs / n) / 255
 
-  // 曝光:把中位亮度推向 0.46(shader 里曝光 100 = 1.5EV)
-  const ev = clamp(Math.log2((0.46 + 0.015) / (median + 0.015)), -1.2, 1.2)
+  // 曝光:只在明显偏暗 / 偏亮时才推中间调(「想要的亮度」不是像素能测出来的)
+  let ev = 0
+  if (median < 0.34) ev = Math.log2(0.44 / (median + 0.015))
+  else if (median > 0.70) ev = Math.log2(0.60 / (median + 0.015))
   const exposure = clamp((ev / 1.5) * 100, -100, 100)
 
   // 黑/白场:发灰(黑场不在底、白场不到顶)时收紧
@@ -104,12 +121,13 @@ export function computeAutoTone(data: Uint8ClampedArray, width: number, height: 
   // 暗部提亮:整体偏暗时补暗部(不硬提曝光)
   const shadows = clamp((0.30 - median) * 130, 0, 46)
 
-  // 对比:整体偏平时补;标准差已经很大则不动
-  const contrast = clamp((0.20 - stdL) * 210, -12, 42)
+  // 对比:只「补」不「削」,免得把本来就有反差的画面压平
+  const contrast = clamp((0.19 - stdL) * 220, 0, 40)
 
-  // 灰世界白平衡(收敛到 ±32,避免毁掉刻意的暖/冷调)
-  const temperature = clamp((bAvg - rAvg) * 1.25, -32, 32)
-  const tint = clamp((gAvg - (rAvg + bAvg) / 2) * 1.4, -28, 28)
+  // 白平衡:死区(轻微偏色不动)+ 限幅 —— 只在确实偏色时温和纠偏
+  const dead = (v: number, d: number) => (v > 0 ? Math.max(0, v - d) : Math.min(0, v + d))
+  const temperature = clamp(dead(bRef - rRef, 0.03) * 260, -22, 22)
+  const tint = clamp(dead(gRef - (rRef + bRef) / 2, 0.02) * 300, -18, 18)
 
   // 色彩与通透:发灰时补自然饱和度与清晰度
   const vibrance = clamp((0.26 - stdL) * 90, 0, 26)
@@ -132,6 +150,29 @@ export function computeAutoTone(data: Uint8ClampedArray, width: number, height: 
     clarity: Math.round(clarity),
     denoise: Math.round(denoise),
   }
+}
+
+/**
+ * 融合「直方图测量」与「AI 语义建议」—— 让「一键构图」与「自动修图」口径一致。
+ *
+ * 原则:
+ *  - 曝光 / 色温 / 色调是**测量问题**(模型估不准)→ 以直方图为主(w=0.7);
+ *  - 对比 / 高光 / 阴影 / 鲜艳度 / 清晰度等是**审美取向** → 以模型为主(w=0.4);
+ *  - 两边都没有的值保持不变;越界一律夹紧。
+ */
+const MEASURE_WEIGHT: Partial<Record<keyof ToneParams, number>> = { exposure: 0.7, temperature: 0.7, tint: 0.7 }
+
+export function blendTone(measured: ToneParams, ai: Partial<ToneParams> | null | undefined): ToneParams {
+  const out = { ...measured }
+  if (!ai) return out
+  for (const k of Object.keys(TONE_LIMITS) as (keyof ToneParams)[]) {
+    const a = ai[k]
+    if (typeof a !== 'number' || !Number.isFinite(a)) continue
+    const w = MEASURE_WEIGHT[k] ?? 0.4
+    const v = measured[k] * w + a * (1 - w)
+    out[k] = Math.round(clamp(v, TONE_LIMITS[k].min, TONE_LIMITS[k].max))
+  }
+  return out
 }
 
 /** 把任意来源的参数补全成完整 ToneParams(用于 AI 建议/预设) */

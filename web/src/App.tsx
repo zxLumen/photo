@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AnalysisResult, ComposeId, CropRect, EditParams, PresetItem, SessionItem, StatusInfo, Subject, ToneParams } from './types.js'
 import { api } from './api.js'
 import { COMPOSITIONS, compositionLabel } from './lib/compose.js'
-import { mergeTone, emptyTone, STYLE_PRESETS } from './lib/autoTone.js'
+import { mergeTone, emptyTone, STYLE_PRESETS, blendTone } from './lib/autoTone.js'
 import { downscaleDataURL, loadImage, loadImageFile, sampleAutoTone } from './lib/imageOps.js'
 import { reportAiStatus, type AiState } from './embed.js'
 import { readState, writeState } from './sessionState.js'
@@ -123,10 +123,12 @@ export function App() {
         setCrop(a.crop)
         // 角度交给本地算法(模型估角不准):检出明显倾斜就用它,否则用模型给的
         const tilt = detectTilt(img)
-        setRotate(tilt.angle !== 0 ? tilt.angle : a.rotate)
+        const rot = tilt.angle !== 0 ? tilt.angle : a.rotate
+        setRotate(rot)
         setComposition(a.composition)
         setSubjects(a.subjects)
-        setTone(mergeTone(a.tone))
+        // 调色 = 直方图测量(按裁剪后区域)⊕ AI 语义建议;与「自动修图」同一套口径
+        setTone(blendTone(sampleAutoTone(img, rot, a.crop), a.tone))
         setStyle(a.style)
         setTab('compose')
         setAi('success', '构图分析完成')
@@ -198,10 +200,12 @@ export function App() {
 
   const runAutoTone = useCallback(() => {
     if (!image) return
-    const t = sampleAutoTone(image, rotate, crop)
-    setTone(t)
-    setAi('success', '已自动调色')
-  }, [image, rotate, crop, setAi])
+    const measured = sampleAutoTone(image, rotate, crop)
+    // 已有 AI 分析就融合(与「一键构图」同一套口径);没有则纯本地测量
+    setTone(analysis?.tone ? blendTone(measured, analysis.tone) : measured)
+    if (analysis?.style) setStyle(analysis.style)
+    setAi('success', '已自动修图')
+  }, [image, rotate, crop, analysis, setAi])
 
   const runAutoStraighten = useCallback(() => {
     if (!image) return
