@@ -627,13 +627,35 @@ input[type='range']::-moz-range-thumb {
 }
 .samples-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 @media (max-width: 720px) {
   .samples-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+/* 分组:每组两三张,按「要修什么」排列 */
+.sample-group {
+  margin-bottom: 14px;
+}
+.sample-group:last-of-type {
+  margin-bottom: 6px;
+}
+.sample-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.sample-group-title span {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
 }
 .sample {
   position: relative;
