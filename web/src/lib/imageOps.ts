@@ -1,5 +1,15 @@
 import type { CropRect, ToneParams } from '../types.js'
-import { computeAutoTone } from './autoTone.js'
+import { deriveAutoTone } from './autoTone.js'
+import { computeImageStats, estimateNoise, type ImageStats } from './imageStats.js'
+
+/** 自动修图的取样结果:参数 + 本图体检数据 */
+export interface AutoToneSample {
+  tone: ToneParams
+  stats: ImageStats
+}
+
+/** 统计取样长边(384 足够稳,又不会拖慢上传) */
+const SAMPLE_SIDE = 384
 
 export function makeCanvas(w: number, h: number): HTMLCanvasElement {
   const c = document.createElement('canvas')
@@ -86,13 +96,13 @@ export function renderStraightened(img: HTMLImageElement, rotateDeg: number, out
   return c
 }
 
-/** 摆正 + 裁剪(用于导出);crop 为摆正后画面的归一化坐标 */
-export function renderCrop(img: HTMLImageElement, rotateDeg: number, crop: CropRect, outW: number, outH: number): HTMLCanvasElement {
+/** 把「摆正后的归一化矩形」画到 outW×outH(内部统一走这里) */
+function drawRegion(img: HTMLImageElement, rotateDeg: number, rect: CropRect, outW: number, outH: number): HTMLCanvasElement {
   const W = img.naturalWidth
   const H = img.naturalHeight
-  const sw = Math.max(1, crop.w * W)
-  const sx = crop.x * W
-  const sy = crop.y * H
+  const sw = Math.max(1, rect.w * W)
+  const sx = rect.x * W
+  const sy = rect.y * H
   const c = makeCanvas(outW, outH)
   const ctx = c.getContext('2d')
   if (!ctx) return c
@@ -111,13 +121,38 @@ export function renderCrop(img: HTMLImageElement, rotateDeg: number, crop: CropR
   return c
 }
 
-/** 在裁剪区域内取样,算出直方图自动调色建议 */
-export function sampleAutoTone(img: HTMLImageElement, rotateDeg: number, crop: CropRect): ToneParams {
-  const geom = renderCrop(img, rotateDeg, crop, 160, Math.max(1, Math.round((160 * crop.h * img.naturalHeight) / (crop.w * img.naturalWidth))))
+/** 摆正 + 裁剪(用于导出);crop 为摆正后画面的归一化坐标 */
+export function renderCrop(img: HTMLImageElement, rotateDeg: number, crop: CropRect, outW: number, outH: number): HTMLCanvasElement {
+  return drawRegion(img, rotateDeg, crop, outW, outH)
+}
+
+/** 在裁剪区域内取样:整幅统计(384px)+ 原生分辨率小块估噪点 */
+export function sampleAutoTone(img: HTMLImageElement, rotateDeg: number, crop: CropRect): AutoToneSample {
+  const cropW = Math.max(1, crop.w * img.naturalWidth)
+  const cropH = Math.max(1, crop.h * img.naturalHeight)
+  const aspect = cropW / cropH
+  const w = aspect >= 1 ? SAMPLE_SIDE : Math.max(8, Math.round(SAMPLE_SIDE * aspect))
+  const h = aspect >= 1 ? Math.max(8, Math.round(SAMPLE_SIDE / aspect)) : SAMPLE_SIDE
+
+  const geom = drawRegion(img, rotateDeg, crop, w, h)
   const ctx = geom.getContext('2d', { willReadFrequently: true })
-  if (!ctx) return computeAutoTone(new Uint8ClampedArray(0), 0, 0)
-  const data = ctx.getImageData(0, 0, geom.width, geom.height).data
-  return computeAutoTone(data, geom.width, geom.height)
+  if (!ctx) {
+    const stats = computeImageStats(new Uint8ClampedArray(0), 0, 0)
+    return { tone: deriveAutoTone(stats), stats }
+  }
+  const stats = computeImageStats(ctx.getImageData(0, 0, w, h).data, w, h)
+
+  // 噪点必须在**原生分辨率**上量:降采样会把噪点平均掉,384px 样本上测不出来
+  const inner: CropRect = { x: crop.x + crop.w * 0.275, y: crop.y + crop.h * 0.275, w: crop.w * 0.45, h: crop.h * 0.45 }
+  const pw = Math.max(16, Math.min(256, Math.round(inner.w * img.naturalWidth)))
+  const ph = Math.max(16, Math.min(256, Math.round(inner.h * img.naturalHeight)))
+  const patch = drawRegion(img, rotateDeg, inner, pw, ph)
+  const pctx = patch.getContext('2d', { willReadFrequently: true })
+  if (pctx) {
+    stats.noise = estimateNoise(pctx.getImageData(0, 0, pw, ph).data, pw, ph)
+  }
+
+  return { tone: deriveAutoTone(stats), stats }
 }
 
 export function canvasToBlob(canvas: HTMLCanvasElement, type = 'image/jpeg', quality = 0.92): Promise<Blob | null> {

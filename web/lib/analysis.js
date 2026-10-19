@@ -3,8 +3,30 @@ import { completeChat } from './llm.js'
 /** 支持的构图法 id(前端展示名称与参考线在 `web/src/lib/compose.ts`) */
 export const COMPOSITIONS = ['thirds', 'golden', 'center', 'diagonal', 'triangle', 'symmetry', 'leading', 'negative']
 
-/** 风格预设 id */
-export const STYLES = ['none', 'portrait', 'landscape', 'night', 'mono', 'film', 'vivid']
+/**
+ * 语义意图枚举(服务端只做轻量清洗,严格归一化在客户端 `src/lib/intent.ts`)。
+ * 注意:模型**不再**输出修图数值 —— 数值由客户端按像素实测推导。
+ */
+export const INTENT_ENUMS = {
+  scene: ['portrait', 'landscape', 'night', 'street', 'food', 'architecture', 'macro', 'document', 'other'],
+  key: ['low', 'normal', 'high'],
+  mood: ['vivid', 'natural', 'muted', 'filmic', 'clean', 'dramatic'],
+  noise: ['none', 'light', 'heavy'],
+  protect: ['dark-mood', 'warm-sunset', 'silhouette', 'high-key-bright', 'vintage'],
+}
+
+export const DEFAULT_INTENT = {
+  scene: 'other',
+  key: 'normal',
+  mood: 'natural',
+  skin: false,
+  noise: 'none',
+  protect: [],
+  brightness: 0,
+  punch: 0,
+  warmth: 0,
+  styleHint: '',
+}
 
 /** 修图参数键 + 取值范围(前端滑块一致) */
 export const TONE_KEYS = [
@@ -32,6 +54,7 @@ const num = (v, fallback = 0) => {
   const n = Number(v)
   return Number.isFinite(n) ? n : fallback
 }
+const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
 
 /** 提示词:要求模型只回一个 JSON 对象,坐标全部归一化到 0..1。 */
 export function buildMessages({ width, height }) {
@@ -44,19 +67,26 @@ export function buildMessages({ width, height }) {
       type: 'text',
       text: [
         `原图尺寸 ${width}×${height}。坐标一律用归一化 0..1(左上为原点),相对原图。`,
-        '请严格按下面 JSON 结构输出(键名固定,数值为数字):',
+        '请严格按下面 JSON 结构输出(键名固定):',
         '{',
         '  "composition": "thirds | golden | center | diagonal | triangle | symmetry | leading | negative",',
         '  "crop": { "x": 0~1, "y": 0~1, "w": 0~1, "h": 0~1 },',
         '  "rotate": -15~15,            // 拉直角度,地平线倾斜才非 0',
         '  "subjects": [ { "x": 0~1, "y": 0~1, "label": "人眼/主体/地平线" } ],',
         '  "horizon": { "angle": -15~15, "y": 0~1 } 或 null,',
-        '  "tone": { "exposure": -100~100, "contrast": -100~100, "highlights": -100~100, "shadows": -100~100,',
-        '            "whites": -100~100, "blacks": -100~100, "temperature": -100~100, "tint": -100~100,',
-        '            "vibrance": -100~100, "saturation": -100~100, "clarity": -100~100, "sharpen": 0~100,',
-        '            "denoise": 0~100, "vignette": -100~100 },',
-        '  "style": "none | portrait | landscape | night | mono | film | vivid",',
-        '  "reason": "一句话说明为什么这样裁与这样调(中文)"',
+        '  "intent": {',
+        '    "scene": "portrait | landscape | night | street | food | architecture | macro | document | other",',
+        '    "key": "low | normal | high",          // 明暗基调:低调(整体偏暗、氛围为主)/ 中性 / 高调(整体明亮)',
+        '    "mood": "vivid | natural | muted | filmic | clean | dramatic",  // 想要的后期气质',
+        '    "skin": true/false,                    // 画面里有没有需要保护的肤色(人像/手持人物)',
+        '    "noise": "none | light | heavy",       // 高感噪点程度',
+        '    "protect": ["dark-mood","warm-sunset","silhouette","high-key-bright","vintage"],  // 必须保留的作者意图,可空',
+        '    "brightness": -1 | 0 | 1,              // 你的观感:整幅应更暗 / 不用动 / 更亮',
+        '    "punch": -1 | 0 | 1,                   // 应更平(柔)/ 不用动 / 更通透',
+        '    "warmth": -1 | 0 | 1,                  // 应更冷 / 不用动 / 更暖',
+        '    "styleHint": "可选,一句话的风格建议(如 风景 / 黑白 / 胶片)"',
+        '  },',
+        '  "reason": "一句话说明为什么这样裁、这样定调(中文)"',
         '}',
         '要点:',
         '1) crop 要让主体落在所选构图法的关键点/线上(三分交点、黄金交点、中心、对角线等);',
@@ -65,11 +95,11 @@ export function buildMessages({ width, height }) {
         '   (画面逆时针需顺时针回正时为正、反之为负),幅度常见 0.3~8°;横平竖直都正才给 0;',
         '   horizon 用来标注你依据的那条线(angle 同 rotate 的符号约定,y 为它在画面中的归一化高度);',
         '   没有可靠参考线时 horizon 给 null。crop 坐标一律基于**摆正后**的画面;',
-        '   (注:客户端另有本地算法做更精确的倾角检测,rotate 仅作兜底;reason 里不必讨论旋转,只讲裁剪与调色)',
-        '4) tone 是与界面滑块同刻度的「自动修图参数」(-100~100;sharpen/denoise 为 0~100)。参考量级:',
-        '   曝光 ±40 ≈ ±0.6EV;对比度 +15 已有明显反差;阴影 +25 能救回暗部;高光 -20 能压住过曝;',
-        '   自然饱和度 +20 明显提色;清晰度 +15 通透感明显。请给**看得出差别**的值,不要过分保守;',
-        '   但画面本来就很到位时对应键给 0,不要硬凑;5) 只输出 JSON。',
+        '   (注:客户端另有本地算法做更精确的倾角检测,rotate 仅作兜底;reason 里不必讨论旋转,只讲裁剪与定调)',
+        '4) **不要输出任何修图数值**(曝光/对比/饱和度等一律不要)。这些数值由客户端按本图像素直方图',
+        '   实测推导;你只负责判断「这是什么画面、该往哪个方向走、哪些意图不能破坏」。',
+        '   所以请把注意力放在 scene / key / mood / skin / noise / protect 与三个方向判断上,判断要具体、不要套话。',
+        '5) 只输出 JSON。',
       ].join('\n'),
     },
     { type: 'image_url', image_url: { url: 'PLACEHOLDER' } },
@@ -157,15 +187,24 @@ export function normalizeAnalysis(raw) {
       ? { angle: clamp(num(r.horizon.angle, 0), -45, 45), y: clamp(num(r.horizon.y, 0.5), 0, 1) }
       : null
 
-  const toneRaw = r.tone && typeof r.tone === 'object' ? r.tone : {}
-  const tone = {}
-  for (const k of TONE_KEYS) {
-    const isSharpenLike = k === 'sharpen' || k === 'denoise'
-    const def = isSharpenLike ? 0 : 0
-    tone[k] = clamp(num(toneRaw[k], def), isSharpenLike ? 0 : -100, 100)
+  // 模型只给语义意图;这里做轻量清洗(枚举值的严格归一化在客户端 intent.ts)
+  const ri = r.intent && typeof r.intent === 'object' ? r.intent : {}
+  const pickEnum = (v, list, def) => (typeof v === 'string' && list.includes(v) ? v : def)
+  const intent = {
+    scene: pickEnum(ri.scene, INTENT_ENUMS.scene, DEFAULT_INTENT.scene),
+    key: pickEnum(ri.key, INTENT_ENUMS.key, DEFAULT_INTENT.key),
+    mood: pickEnum(ri.mood, INTENT_ENUMS.mood, DEFAULT_INTENT.mood),
+    skin: ri.skin === true,
+    noise: pickEnum(ri.noise, INTENT_ENUMS.noise, DEFAULT_INTENT.noise),
+    protect: Array.isArray(ri.protect)
+      ? Array.from(new Set(ri.protect.filter((p) => typeof p === 'string' && INTENT_ENUMS.protect.includes(p)))).slice(0, 5)
+      : [],
+    brightness: clamp(Math.round(num(ri.brightness, 0)), -1, 1),
+    punch: clamp(Math.round(num(ri.punch, 0)), -1, 1),
+    warmth: clamp(Math.round(num(ri.warmth, 0)), -1, 1),
+    styleHint: str(ri.styleHint, 20),
   }
 
-  const style = STYLES.includes(r.style) ? r.style : 'none'
   const reason = typeof r.reason === 'string' ? r.reason.slice(0, 300) : ''
 
   return {
@@ -174,8 +213,7 @@ export function normalizeAnalysis(raw) {
     rotate: clamp(num(r.rotate, 0), -15, 15),
     subjects,
     horizon,
-    tone,
-    style,
+    intent,
     reason,
   }
 }

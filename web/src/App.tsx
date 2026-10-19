@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AnalysisResult, ComposeId, CropRect, EditParams, PresetItem, SessionItem, StatusInfo, Subject, ToneParams } from './types.js'
 import { api } from './api.js'
 import { COMPOSITIONS, compositionLabel } from './lib/compose.js'
-import { mergeTone, emptyTone, STYLE_PRESETS, blendTone } from './lib/autoTone.js'
+import { mergeTone, emptyTone, applyLook, EV_SCALE } from './lib/autoTone.js'
+import { applyIntent, describeIntent, normalizeIntent } from './lib/intent.js'
+import { describeStats, type ImageStats } from './lib/imageStats.js'
 import { downscaleDataURL, loadImage, loadImageFile, sampleAutoTone } from './lib/imageOps.js'
 import { reportAiStatus, type AiState } from './embed.js'
 import { readState, writeState } from './sessionState.js'
@@ -30,7 +32,12 @@ export function App() {
   const [composition, setComposition] = useState<ComposeId>('thirds')
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [tone, setTone] = useState<ToneParams>(emptyTone())
-  const [style, setStyle] = useState('none')
+  /** 实测基座(未叠加风格层);切换风格时以它为底重新叠加 */
+  const [baseTone, setBaseTone] = useState<ToneParams>(emptyTone())
+  /** 叠加中的风格层 id(none = 不叠加) */
+  const [lookId, setLookId] = useState('none')
+  const [toneSource, setToneSource] = useState<'none' | 'auto' | 'manual'>('none')
+  const [stats, setStats] = useState<ImageStats | null>(null)
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null)
 
   const [tab, setTab] = useState<Tab>('compose')
@@ -84,8 +91,19 @@ export function App() {
       if (typeof p.rotate === 'number') setRotate(p.rotate)
       if (p.composition) setComposition(p.composition)
       if (p.subjects) setSubjects(p.subjects)
-      if (p.tone) setTone(mergeTone(p.tone))
-      if (p.style) setStyle(p.style)
+      if (p.tone) {
+        const t = mergeTone(p.tone)
+        setTone(t)
+        if (p.v === 2) {
+          setBaseTone(p.baseTone ? mergeTone(p.baseTone) : t)
+          setLookId(p.style && p.style !== 'none' ? p.style : 'none')
+        } else {
+          // 旧版存档:style 已经烘进 tone,不能再叠一次
+          setBaseTone(t)
+          setLookId('none')
+        }
+        setToneSource(p.source ?? 'manual')
+      }
       if (p.fileName) setFileName(p.fileName)
     }
     const src = readState<string>('image', '')
@@ -99,8 +117,19 @@ export function App() {
   // 参数随会话保存
   useEffect(() => {
     if (!restoredRef.current) return
-    writeState('params', { crop, rotate, composition, subjects, tone, style, fileName } satisfies Partial<EditParams> & { fileName: string })
-  }, [crop, rotate, composition, subjects, tone, style, fileName])
+    writeState('params', {
+      crop,
+      rotate,
+      composition,
+      subjects,
+      tone,
+      baseTone,
+      style: lookId,
+      source: toneSource,
+      v: 2,
+      fileName,
+    } satisfies Partial<EditParams> & { fileName: string })
+  }, [crop, rotate, composition, subjects, tone, baseTone, lookId, toneSource, fileName])
 
   const refreshSessions = useCallback(() => {
     api.sessions().then((r) => setSessions(r.items)).catch(() => {})
@@ -118,7 +147,8 @@ export function App() {
       setAi('thinking', '视觉分析中')
       try {
         const { dataUrl, width, height } = downscaleDataURL(img, 1024, 0.72)
-        const { analysis: a } = await api.analyze(dataUrl, width, height)
+        const { analysis: raw } = await api.analyze(dataUrl, width, height)
+        const a: AnalysisResult = { ...raw, intent: normalizeIntent(raw?.intent) }
         setAnalysis(a)
         setCrop(a.crop)
         // 角度交给本地算法(模型估角不准):检出明显倾斜就用它,否则用模型给的
@@ -127,9 +157,14 @@ export function App() {
         setRotate(rot)
         setComposition(a.composition)
         setSubjects(a.subjects)
-        // 调色 = 直方图测量(按裁剪后区域)⊕ AI 语义建议;与「自动修图」同一套口径
-        setTone(blendTone(sampleAutoTone(img, rot, a.crop), a.tone))
-        setStyle(a.style)
+        // 调色 = 客户端按裁剪区**实测推导**(唯一数值来源)+ 模型意图的定向微调与护栏
+        const { tone: measured, stats: s } = sampleAutoTone(img, rot, a.crop)
+        const t = applyIntent(measured, a.intent, s)
+        setStats(s)
+        setBaseTone(t)
+        setTone(t)
+        setLookId('none')
+        setToneSource('auto')
         setTab('compose')
         setAi('success', '构图分析完成')
       } catch (e) {
@@ -158,7 +193,10 @@ export function App() {
         setComposition('thirds')
         setSubjects([])
         setTone(emptyTone())
-        setStyle('none')
+        setBaseTone(emptyTone())
+        setLookId('none')
+        setToneSource('none')
+        setStats(null)
         setAnalysis(null)
         setTab('compose')
         setCompare(false)
@@ -200,11 +238,15 @@ export function App() {
 
   const runAutoTone = useCallback(() => {
     if (!image) return
-    const measured = sampleAutoTone(image, rotate, crop)
-    // 已有 AI 分析就融合(与「一键构图」同一套口径);没有则纯本地测量
-    setTone(analysis?.tone ? blendTone(measured, analysis.tone) : measured)
-    if (analysis?.style) setStyle(analysis.style)
-    setAi('success', '已自动修图')
+    // 数值一律来自本图实测;已有 AI 分析时,意图只做定向微调与护栏
+    const { tone: measured, stats: s } = sampleAutoTone(image, rotate, crop)
+    const t = applyIntent(measured, analysis?.intent ?? null, s)
+    setStats(s)
+    setBaseTone(t)
+    setTone(t)
+    setLookId('none')
+    setToneSource('auto')
+    setAi('success', '已按本图测算')
   }, [image, rotate, crop, analysis, setAi])
 
   const runAutoStraighten = useCallback(() => {
@@ -218,12 +260,38 @@ export function App() {
     await runAnalyze()
   }, [runAnalyze])
 
-  const applyStyle = useCallback((id: string) => {
-    setStyle(id)
-    const p = STYLE_PRESETS[id]
-    if (id === 'none' || !p) setTone(emptyTone())
-    else setTone(mergeTone(p.tone))
+  /** 手动改任一滑块 = 把风格层「拍平」成显式数值,避免叠加歧义 */
+  const changeTone = useCallback(
+    (patch: Partial<ToneParams>) => {
+      const next = mergeTone({ ...tone, ...patch })
+      setTone(next)
+      setBaseTone(next)
+      setLookId('none')
+      setToneSource('manual')
+    },
+    [tone],
+  )
+
+  const resetTone = useCallback(() => {
+    setTone(emptyTone())
+    setBaseTone(emptyTone())
+    setLookId('none')
+    setToneSource('manual')
   }, [])
+
+  /** 风格 = 在实测基座上加一层 look(可开关),不再整组替换 */
+  const chooseLook = useCallback(
+    (id: string) => {
+      if (id === 'none' || id === lookId) {
+        setLookId('none')
+        setTone(baseTone)
+        return
+      }
+      setLookId(id)
+      setTone(applyLook(baseTone, id))
+    },
+    [lookId, baseTone],
+  )
 
   /* ---------------- 作品 / 预设 ---------------- */
 
@@ -233,7 +301,17 @@ export function App() {
       setBusy('保存中…')
       try {
         const thumb = downscaleDataURL(image, 360, 0.7).dataUrl
-        const params: EditParams = { crop, rotate, composition, subjects, tone, style }
+        const params: EditParams = {
+          crop,
+          rotate,
+          composition,
+          subjects,
+          tone,
+          style: lookId,
+          baseTone,
+          source: toneSource,
+          v: 2,
+        }
         await api.saveSession({ name, thumb, params, analysis })
         refreshSessions()
       } catch (e) {
@@ -242,7 +320,7 @@ export function App() {
         setBusy('')
       }
     },
-    [image, crop, rotate, composition, subjects, tone, style, analysis, refreshSessions],
+    [image, crop, rotate, composition, subjects, tone, lookId, baseTone, toneSource, analysis, refreshSessions],
   )
 
   const openSession = useCallback((s: SessionItem) => {
@@ -251,10 +329,20 @@ export function App() {
       setRotate(s.params.rotate)
       setComposition(s.params.composition)
       setSubjects(s.params.subjects ?? [])
-      setTone(mergeTone(s.params.tone))
-      setStyle(s.params.style ?? 'none')
+      const t = mergeTone(s.params.tone)
+      setTone(t)
+      if (s.params.v === 2) {
+        setBaseTone(s.params.baseTone ? mergeTone(s.params.baseTone) : t)
+        setLookId(s.params.style && s.params.style !== 'none' ? s.params.style : 'none')
+      } else {
+        // 旧存档:style 已烘进 tone
+        setBaseTone(t)
+        setLookId('none')
+      }
+      setToneSource(s.params.source ?? 'manual')
     }
-    setAnalysis(s.analysis ?? null)
+    setStats(null)
+    setAnalysis(s.analysis ? { ...s.analysis, intent: normalizeIntent(s.analysis.intent) } : null)
     setFileName(s.name)
     if (s.thumb) {
       loadImage(s.thumb)
@@ -277,15 +365,19 @@ export function App() {
 
   const savePreset = useCallback(
     async (name: string) => {
-      await api.savePreset({ name, tone, style }).catch(() => {})
+      await api.savePreset({ name, tone, style: lookId }).catch(() => {})
       refreshPresets()
     },
-    [tone, style, refreshPresets],
+    [tone, lookId, refreshPresets],
   )
 
   const applyPreset = useCallback((p: PresetItem) => {
-    setTone(mergeTone(p.tone))
-    setStyle(p.style ?? 'none')
+    // 用户预设是「整套参数」,直接作为基座;风格层归零
+    const t = mergeTone(p.tone)
+    setTone(t)
+    setBaseTone(t)
+    setLookId('none')
+    setToneSource('manual')
   }, [])
 
   const deletePreset = useCallback(
@@ -517,11 +609,14 @@ export function App() {
                 {tab === 'adjust' && (
                   <AdjustPanel
                     tone={tone}
-                    style={style}
-                    onChange={(patch) => setTone((t) => ({ ...t, ...patch }))}
-                    onStyle={applyStyle}
+                    look={lookId}
+                    source={toneSource}
+                    diagnosis={stats ? describeStats(stats, (tone.exposure * EV_SCALE) / 100) : ''}
+                    intentText={analysis ? describeIntent(analysis.intent) : ''}
+                    onChange={changeTone}
+                    onLook={chooseLook}
                     onAuto={runAutoTone}
-                    onReset={() => setTone(emptyTone())}
+                    onReset={resetTone}
                   />
                 )}
 

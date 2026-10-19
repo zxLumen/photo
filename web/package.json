@@ -14,7 +14,8 @@
     "preview": "vite preview",
     "start": "node --env-file-if-exists=.env server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js && npm run test:lib",
+    "test:lib": "tsc -p tsconfig.test.json && node --test .tmp-test/test-lib/*.test.js"
   },
   "dependencies": {
     "react": "^19.0.0",

@@ -3,6 +3,7 @@ web/node_modules/
 web/dist/
 web/.env
 web/data/
+web/.tmp-test/
 data/
 *.log
 .DS_Store

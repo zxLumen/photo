@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".tmp-test",
+    "rootDir": ".",
+    "allowImportingTsExtensions": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "types": []
+  },
+  "include": ["src/lib/autoTone.ts", "src/lib/intent.ts", "src/lib/imageStats.ts", "src/types.ts", "test-lib"]
+}

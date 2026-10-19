@@ -405,6 +405,46 @@ input[type='range']::-moz-range-thumb {
   margin-bottom: 12px;
 }
 
+/* ---------------- 调色:来源徽标 / 实测诊断 ---------------- */
+.tone-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--bg);
+}
+.badge.tone-auto {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(255, 200, 90, 0.12);
+}
+.badge.look {
+  color: #8fd3ff;
+  border-color: #2f6f96;
+  background: rgba(90, 180, 255, 0.12);
+}
+.tone-note {
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+.tone-note.diag {
+  border-left: 2px solid var(--line);
+  padding-left: 8px;
+}
+.style-block {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
 .row2 {
   display: flex;
   gap: 8px;
