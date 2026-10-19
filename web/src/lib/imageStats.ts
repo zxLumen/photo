@@ -307,7 +307,7 @@ export function describeStats(s: ImageStats, exposureEv = 0): string {
   const out: string[] = []
 
   if (s.p50 < 0.34) out.push(`偏暗 p50=${s.p50.toFixed(2)}`)
-  else if (s.p50 > 0.68) out.push(`偏亮 p50=${s.p50.toFixed(2)}`)
+  else if (s.p50 > 0.74) out.push(`偏亮 p50=${s.p50.toFixed(2)}`)
   else out.push('亮度合适')
 
   const span = s.p95 - s.p5
