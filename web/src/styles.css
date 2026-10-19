@@ -686,6 +686,29 @@ input[type='range']::-moz-range-thumb {
   font-size: 11px;
   color: #5c6478;
 }
+.samples-credit summary {
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+.samples-credit summary:hover {
+  color: var(--accent);
+}
+.samples-credit ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  max-height: 140px;
+  overflow: auto;
+  line-height: 1.7;
+}
+.samples-credit a {
+  color: #7d8699;
+  text-decoration: none;
+}
+.samples-credit a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
 .samples-err {
   margin-top: 8px;
   font-size: 12px;

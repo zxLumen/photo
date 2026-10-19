@@ -151,9 +151,8 @@ export function App() {
         const a: AnalysisResult = { ...raw, intent: normalizeIntent(raw?.intent) }
         setAnalysis(a)
         setCrop(a.crop)
-        // 角度交给本地算法(模型估角不准):检出明显倾斜就用它,否则用模型给的
-        const tilt = detectTilt(img)
-        const rot = tilt.angle !== 0 ? tilt.angle : a.rotate
+        // 角度只信本地算法(模型估角不可靠):置信度不足时宁可不摆正,也不套用模型的瞎猜
+        const rot = detectTilt(img).angle
         setRotate(rot)
         setComposition(a.composition)
         setSubjects(a.subjects)

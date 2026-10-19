@@ -24,6 +24,12 @@ const STEP = 0.2
 const BIN_PX = 2
 /** 峰值能量至少要比中位角高这么多倍,才认为「存在主导水平线」 */
 const MIN_RATIO = 1.25
+/**
+ * 置信度下限。
+ * 实测:真正倾斜的图(湖面) conf≈0.60;而「山脊/海岸线本身就是斜的」这类图
+ * 会给出 10° 这种离谱角度,但 conf 只有 ≈0.36 —— 加这道闸避免把好图拧歪。
+ */
+const MIN_CONFIDENCE = 0.45
 /** 小于这个角度就当作已经水平(避免抖动) */
 const MIN_ANGLE = 0.25
 
@@ -95,7 +101,7 @@ export function detectTilt(img: HTMLImageElement, maxSide = 360): TiltResult {
   const ratio = energies[bi] / med
   const confidence = Math.min(1, Math.max(0, (ratio - 1) / 0.8))
 
-  if (ratio < MIN_RATIO) return { angle: 0, confidence }
+  if (ratio < MIN_RATIO || confidence < MIN_CONFIDENCE) return { angle: 0, confidence }
   const angle = -angles[bi]
   if (Math.abs(angle) < MIN_ANGLE) return { angle: 0, confidence }
   return { angle: Math.max(-15, Math.min(15, Math.round(angle * 10) / 10)), confidence }

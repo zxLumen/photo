@@ -169,7 +169,9 @@ export function applyIntent(measured: ToneParams, intent: AiIntent | null | unde
   // ---- 保护:不要「纠正」掉作者的意图 ----
   for (const p of intent.protect) {
     if (p === 'dark-mood') {
-      out.exposure = Math.min(out.exposure, 12)
+      // 「保留暗调氛围」是让它别被提成白天,不是一点都不许提:
+      // 实测 p50=0.14 的烛光照片需要约 +0.9EV,这里给到 +0.34EV 的中庸上限
+      out.exposure = Math.min(out.exposure, 24)
       out.shadows = Math.min(out.shadows, 20)
     } else if (p === 'silhouette') {
       out.shadows = Math.min(out.shadows, 8)

@@ -39,7 +39,7 @@ export function SampleGallery({ onPick }: Props) {
             className={`sample ${loading === s.id ? 'loading' : ''}`}
             disabled={!!loading}
             onClick={() => void pick(s)}
-            title={`${s.name} · ${s.issue}`}
+            title={`${s.name} · ${s.issue} · ${s.credit}`}
           >
             <img src={s.thumb} alt={s.name} loading="lazy" decoding="async" />
             <span className="sample-name">{s.name}</span>
@@ -49,7 +49,19 @@ export function SampleGallery({ onPick }: Props) {
         ))}
       </div>
       {err && <div className="samples-err">{err}</div>}
-      <div className="samples-credit">示例图来自 Unsplash(免费授权),仅用于体验效果</div>
+      <details className="samples-credit">
+        <summary>图片来源与授权(CC BY / CC BY-SA 需署名)</summary>
+        <ul>
+          {SAMPLE_PHOTOS.map((s) => (
+            <li key={s.id}>
+              <a href={s.source} target="_blank" rel="noreferrer noopener">
+                {s.name}
+              </a>
+              <span> — {s.credit}</span>
+            </li>
+          ))}
+        </ul>
+      </details>
     </div>
   )
 }

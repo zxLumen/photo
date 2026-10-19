@@ -134,7 +134,9 @@ test('意图护栏:护肤色时压清晰度/锐化,噪点重时强降噪', () =>
 test('意图护栏:保留暗调氛围时不强提曝光', () => {
   const base = deriveAutoTone(stats(darkFlat))
   const t = applyIntent(base, normalizeIntent({ key: 'low', protect: ['dark-mood'], brightness: 1 }))
-  assert.ok(t.exposure <= 12, `exposure 应 <= 12,实际 ${t.exposure}`)
+  assert.ok(t.exposure <= 24, `exposure 应 <= 24,实际 ${t.exposure}`)
+  // 但也不能把「欠曝」完全按住不动
+  assert.ok(t.exposure > 0, `仍应保留一定提亮,实际 ${t.exposure}`)
 })
 
 test('意图是定向微调,不是覆盖实测(同一意图用在两张图上结果不同)', () => {
