@@ -99,6 +99,8 @@ export async function upsertPreset(dataDir, scopeKey, input) {
     name: asString(input?.name, 40) || '预设',
     tone: input?.tone && typeof input.tone === 'object' ? input.tone : {},
     style: asString(input?.style, 20) || 'none',
+    filter: asString(input?.filter, 30) || 'none',
+    filterAmount: Number.isFinite(Number(input?.filterAmount)) ? Math.max(0, Math.min(100, Math.round(Number(input.filterAmount)))) : 100,
     createdAt: now(),
   }
   const idx = items.findIndex((p) => p.id === id)

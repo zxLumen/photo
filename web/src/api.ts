@@ -24,7 +24,7 @@ export const api = {
   deleteSession: (id: string) => fetch(`/api/sessions/${id}`, { method: 'DELETE' }).then(j<{ ok: boolean }>),
 
   presets: () => fetch('/api/presets').then(j<{ items: PresetItem[] }>),
-  savePreset: (payload: { id?: string; name: string; tone: ToneParams; style: string }) =>
+  savePreset: (payload: { id?: string; name: string; tone: ToneParams; style: string; filter?: string; filterAmount?: number }) =>
     post('/api/presets', payload).then(j<{ item: PresetItem }>),
   deletePreset: (id: string) => fetch(`/api/presets/${id}`, { method: 'DELETE' }).then(j<{ ok: boolean }>),
 

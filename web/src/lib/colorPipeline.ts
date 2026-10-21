@@ -1,4 +1,5 @@
-import type { ToneParams } from '../types.js'
+import type { FilterPick, ToneParams } from '../types.js'
+import { getFilter, getLut, LUT_N, type Lut } from './filters.js'
 
 const VERT = `
 attribute vec2 a_pos;
@@ -47,8 +48,38 @@ uniform float u_clarity;
 uniform float u_sharpen;
 uniform float u_denoise;
 uniform float u_vignette;
+uniform sampler2D u_lut;
+uniform float u_lutN;
+uniform float u_lutCols;
+uniform vec2 u_lutTexSize;
+uniform float u_filterOn;
+uniform float u_filterAmount;
+uniform float u_grain;
+uniform float u_filterVignette;
 
 float luma(vec3 c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; }
+
+/* ---- 3D LUT 采样:片内双线性(GPU)+ 片间线性(手动)= 三线性 ---- */
+vec3 lutSlice(float r, float g, float slice) {
+  float tx = mod(slice, u_lutCols);
+  float ty = floor(slice / u_lutCols);
+  vec2 base = vec2(tx, ty) * u_lutN;
+  vec2 uv = (base + vec2(r, g) * (u_lutN - 1.0) + 0.5) / u_lutTexSize;
+  return texture2D(u_lut, uv).rgb;
+}
+vec3 lutLookup(vec3 c) {
+  float bv = clamp(c.b, 0.0, 1.0) * (u_lutN - 1.0);
+  float b0 = floor(bv);
+  float b1 = min(b0 + 1.0, u_lutN - 1.0);
+  return mix(lutSlice(c.r, c.g, b0), lutSlice(c.r, c.g, b1), bv - b0);
+}
+
+/* 廉价值噪声(胶片颗粒) */
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
 
 /* sRGB <-> 线性光(逐通道标量) */
 float s2l(float v) { return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); }
@@ -180,6 +211,27 @@ void main() {
     outC = p;
   }
 
+  /* ---- 6. 滤镜:3D LUT 色彩变换 + 颗粒 + 暗角 ---- */
+  if (u_filterOn > 0.5) {
+    vec3 look = lutLookup(outC);
+    outC = mix(outC, look, u_filterAmount);
+    /* 1/255 抖动:33³ LUT 在天空渐变上可能出现色带,这点噪声肉眼不可见但能打散 */
+    outC += (hash21(v_uv / max(u_texel, vec2(1e-6))) - 0.5) / 255.0;
+
+    if (u_grain > 0.001) {
+      float lg = luma(outC);
+      float wg = 1.0 - abs(2.0 * lg - 1.0) * 0.65;      /* 中间调颗粒最明显 */
+      vec2 gp = v_uv / max(u_texel, vec2(1e-6)) * 0.62;  /* 约 1.6px 的颗粒尺度 */
+      float nz = hash21(gp) + hash21(gp + 31.7) - 1.0;
+      outC += nz * u_grain * 0.11 * wg;
+    }
+    if (abs(u_filterVignette) > 0.001) {
+      vec2 dv = v_uv - vec2(0.5, 0.5);
+      float rr = length(dv) * 1.4142136;
+      outC *= 1.0 + smoothstep(0.45, 1.12, rr) * u_filterVignette * 0.55;
+    }
+  }
+
   gl_FragColor = vec4(clamp(outC, 0.0, 1.0), 1.0);
 }
 `
@@ -226,6 +278,14 @@ const UNIFORM_NAMES = [
   'u_sharpen',
   'u_denoise',
   'u_vignette',
+  'u_lut',
+  'u_lutN',
+  'u_lutCols',
+  'u_lutTexSize',
+  'u_filterOn',
+  'u_filterAmount',
+  'u_grain',
+  'u_filterVignette',
 ] as const
 
 const TONE_KEYS = [
@@ -284,8 +344,14 @@ export class ColorRenderer {
   private texture: WebGLTexture | null = null
   private buf: WebGLBuffer | null = null
   private u: Partial<Record<(typeof UNIFORM_NAMES)[number], WebGLUniformLocation | null>> = {}
+  /** 已上传的 LUT 贴图(按 id@精度 缓存) */
+  private lutTex = new Map<string, WebGLTexture>()
 
-  constructor(private canvas: HTMLCanvasElement) {
+  constructor(
+    private canvas: HTMLCanvasElement,
+    /** LUT 精度:主画面 33,缩略图 17 */
+    private lutN: number = LUT_N,
+  ) {
     this.supported = false
     this.graded = false
     this.errorLog = ''
@@ -344,6 +410,7 @@ export class ColorRenderer {
 
     for (const name of UNIFORM_NAMES) this.u[name] = gl.getUniformLocation(prog, name)
     gl.uniform1i(this.u.u_image ?? null, 0)
+    if (this.u.u_lut) gl.uniform1i(this.u.u_lut, 1)
     this.supported = true
   }
 
@@ -361,7 +428,26 @@ export class ColorRenderer {
     gl.uniform2f(this.u.u_texel ?? null, 1 / Math.max(1, width), 1 / Math.max(1, height))
   }
 
-  render(tone: ToneParams): void {
+  /** 上传一张 LUT 到纹理单元 1(按 key 缓存) */
+  private uploadLut(key: string, lut: Lut): WebGLTexture | null {
+    const gl = this.gl
+    if (!gl) return null
+    const tex = gl.createTexture()
+    if (!tex) return null
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, lut.width, lut.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, lut.data)
+    gl.activeTexture(gl.TEXTURE0)
+    this.lutTex.set(key, tex)
+    return tex
+  }
+
+  render(tone: ToneParams, filter?: FilterPick | null): void {
     const gl = this.gl
     if (!gl || !this.program) return
     gl.useProgram(this.program)
@@ -382,6 +468,32 @@ export class ColorRenderer {
       gl.uniform1f(this.u.u_sharpen ?? null, g(tone.sharpen))
       gl.uniform1f(this.u.u_denoise ?? null, g(tone.denoise))
       gl.uniform1f(this.u.u_vignette ?? null, g(tone.vignette))
+
+      // ---- 滤镜:一次 LUT 采样 + 空间效果 ----
+      const on = !!filter && filter.id !== 'none' && filter.amount > 0
+      gl.uniform1f(this.u.u_filterOn ?? null, on ? 1 : 0)
+      gl.uniform1f(this.u.u_filterAmount ?? null, on ? Math.min(1, filter.amount / 100) : 0)
+      gl.uniform1f(this.u.u_grain ?? null, on ? getFilter(filter.id).grain : 0)
+      gl.uniform1f(this.u.u_filterVignette ?? null, on ? getFilter(filter.id).vignette : 0)
+      if (on) {
+        const key = `${filter.id}@${this.lutN}`
+        let tex = this.lutTex.get(key)
+        let lut: Lut | null = null
+        if (!tex) {
+          lut = getLut(filter.id, this.lutN)
+          tex = this.uploadLut(key, lut) ?? undefined
+        }
+        if (tex) {
+          gl.activeTexture(gl.TEXTURE1)
+          gl.bindTexture(gl.TEXTURE_2D, tex)
+          gl.activeTexture(gl.TEXTURE0)
+          if (lut) {
+            gl.uniform1f(this.u.u_lutN ?? null, lut.n)
+            gl.uniform1f(this.u.u_lutCols ?? null, lut.cols)
+            gl.uniform2f(this.u.u_lutTexSize ?? null, lut.width, lut.height)
+          }
+        }
+      }
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3)
   }
@@ -390,6 +502,8 @@ export class ColorRenderer {
     const gl = this.gl
     if (!gl) return
     if (this.texture) gl.deleteTexture(this.texture)
+    for (const t of this.lutTex.values()) gl.deleteTexture(t)
+    this.lutTex.clear()
     if (this.buf) gl.deleteBuffer(this.buf)
     if (this.program) gl.deleteProgram(this.program)
   }

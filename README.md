@@ -3,7 +3,7 @@
 给个人主页(zxLumen-Blog)应用栏用的独立子应用。上传一张照片,视觉模型现场分析主体、地平线与画面,
 给出**最佳构图法**(三分 / 黄金分割 / 中心 / 对角线 / 三角 / 对称 / 引导线 / 留白)并**自动裁出构图框**,
 同时给出一整套修图参数(曝光 / 对比 / 高光 / 阴影 / 黑白场 / 色温 / 色调 / 饱和度 / 清晰度 / 锐化 / 降噪 / 暗角),
-可手动微调后一键导出。
+并**按画面内容挑一个滤镜**(52 个:胶片 / 日系 / 电影 / 复古 / 黑白 / 题材),可手动微调后一键导出。
 
 - 裁剪与调色**全程在浏览器内**完成:裁剪/旋转用 Canvas 2D,调色用 WebGL shader 实时预览(与导出同一套管线)。
 - 视觉分析经**博客 AI 网关**调用(`http://app:3000/api/ai/v1`),真实 Key 只在主站;也支持直连调试。
@@ -18,8 +18,8 @@ photo/
    ├─ server.js        # Express(零依赖 http):静态 + /api/*
    ├─ lib/             # 服务端:scope(cid 隔离)/ store / settings / llm / analysis / photo-store
    ├─ src/             # 前端:Vite + React 19 + TS
-   │  ├─ components/   # CropStage / AdjustPanel / WorksPanel / SettingsPanel / ExportDialog / Uploader
-   │  └─ lib/          # compose(构图几何) / crop(裁剪与吸附) / colorPipeline(WebGL) / autoTone / imageOps
+   │  ├─ components/   # CropStage / AdjustPanel / FilterRail / WorksPanel / SettingsPanel / ExportDialog / Uploader
+   │  └─ lib/          # compose(构图几何) / crop(裁剪与吸附) / colorPipeline(WebGL) / filters(LUT 滤镜) / autoTone / imageOps
    └─ test/            # node --test(服务端纯函数与存储)
 ```
 
@@ -39,11 +39,21 @@ npm start
 - 站长兜底:`http://127.0.0.1:8791/?owner=<PHOTO_OWNER_TOKEN>` 换 `photo_owner` cookie;
   与博客同 `SESSION_SECRET` 时,已登录博客即视为站长(SSO)。
 
+## 滤镜
+
+- 目录在 `src/lib/filters.json`(**前后端共用**:提示词、服务端校验、前端配方都读这一份),配方在 `src/lib/filters.ts`。
+- 每个滤镜是一段声明式配方(曲线 / 通道混合 / 分色 / 分色相 HSL / 褪色),按需烘焙成 **33³ 3D LUT**,
+  渲染时只是一次纹理采样(缩略图用 17³)。不内置任何 LUT 图片,离线可用。
+- 叠加顺序:**按本图实测的调色 → 滤镜 LUT → 颗粒 / 暗角**。滤镜不修改调色参数,可单独开关、调节强度(0–100)。
+- 自动修图时视觉模型输出 `filter{id, amount, why}`;客户端只认目录里的 id,并有三道护栏:
+  文档不加滤镜、低调照片不套高调滤镜、有肤色不套强偏色滤镜、噪点重时压低颗粒类强度。
+- 颜色配方跑在 sRGB 空间,预览 / 前后对比 / 导出共用同一个 shader,所见即所得。
+
 ## 测试与校验
 
 ```bash
 cd web
-npm test          # node --test(lib/analysis.js 与 lib/photo-store.js)
+npm test          # node --test(服务端)+ tsc 编译后的 TS 逻辑测试(含滤镜 LUT / AI 选择)
 npm run typecheck # tsc --noEmit
 npm run build     # vite build → dist/
 ```

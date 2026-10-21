@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { CropRect, ToneParams } from '../types.js'
+import type { CropRect, FilterPick, ToneParams } from '../types.js'
 import { ColorRenderer } from '../lib/colorPipeline.js'
 import { canvasToBlob, downloadBlob, makeCanvas, renderCrop } from '../lib/imageOps.js'
 
@@ -8,6 +8,7 @@ interface Props {
   rotate: number
   crop: CropRect
   tone: ToneParams
+  filter: FilterPick
   fileBase: string
   onClose: () => void
 }
@@ -19,7 +20,7 @@ const LONG_OPTIONS = [
   { v: 1280, label: '1280px' },
 ]
 
-export function ExportDialog({ image, rotate, crop, tone, fileBase, onClose }: Props) {
+export function ExportDialog({ image, rotate, crop, tone, filter, fileBase, onClose }: Props) {
   const [format, setFormat] = useState<'image/jpeg' | 'image/png'>('image/jpeg')
   const [quality, setQuality] = useState(92)
   const [maxLong, setMaxLong] = useState(0)
@@ -42,7 +43,7 @@ export function ExportDialog({ image, rotate, crop, tone, fileBase, onClose }: P
       const r = new ColorRenderer(probe)
       if (r.supported) {
         r.setSource(geom, outW, outH)
-        r.render(tone)
+        r.render(tone, filter)
         out = probe
         r.dispose()
       }

@@ -1,7 +1,22 @@
 import { completeChat } from './llm.js'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 /** 支持的构图法 id(前端展示名称与参考线在 `web/src/lib/compose.ts`) */
 export const COMPOSITIONS = ['thirds', 'golden', 'center', 'diagonal', 'triangle', 'symmetry', 'leading', 'negative']
+
+/**
+ * 滤镜目录与前端**共用同一份 JSON**(`src/lib/filters.json`),
+ * 提示词、校验、前端配方因此不会各写一套而漂移。
+ */
+const FILTER_CATALOG = JSON.parse(readFileSync(fileURLToPath(new URL('../src/lib/filters.json', import.meta.url)), 'utf8'))
+export const FILTER_IDS = FILTER_CATALOG.items.map((i) => i.id)
+const FILTER_LINES = FILTER_CATALOG.groups
+  .map((g) => {
+    const items = FILTER_CATALOG.items.filter((i) => i.group === g.id)
+    return `  - ${g.label}: ` + items.map((i) => `${i.id}(${i.name})`).join('、')
+  })
+  .join('\n')
 
 /**
  * 语义意图枚举(服务端只做轻量清洗,严格归一化在客户端 `src/lib/intent.ts`)。
@@ -25,6 +40,9 @@ export const DEFAULT_INTENT = {
   brightness: 0,
   punch: 0,
   warmth: 0,
+  filter: 'none',
+  filterAmount: 100,
+  filterWhy: '',
   styleHint: '',
 }
 
@@ -82,6 +100,7 @@ export function buildMessages({ width, height }) {
         '    "brightness": -1 | 0 | 1,              // 你的观感:整幅应更暗 / 不用动 / 更亮',
         '    "punch": -1 | 0 | 1,                   // 应更平(柔)/ 不用动 / 更通透',
         '    "warmth": -1 | 0 | 1,                  // 应更冷 / 不用动 / 更暖',
+        '    "filter": { "id": "<下方清单里的 id>", "amount": 40~100, "why": "一句话说明为什么选它" },',
         '    "styleHint": "可选,一句话的风格建议(如 风景 / 黑白 / 胶片)"',
         '  },',
         '  "reason": "一句话说明为什么这样裁、这样定调(中文)"',
@@ -93,6 +112,16 @@ export function buildMessages({ width, height }) {
         '   数值与摆正角都由客户端按像素实测计算,你只负责判断「这是什么画面、该往哪个方向走、哪些意图不能破坏」。',
         '   所以请把注意力放在 scene / key / mood / skin / noise / protect 与三个方向判断上,判断要具体、不要套话。',
         '4) 只输出 JSON。',
+        '',
+        '滤镜清单(id 必须严格照抄,不要自创;按组列出):',
+        FILTER_LINES,
+        '选滤镜的要点:',
+        '1) 先看「这是什么画面、什么情绪、什么明暗」,选气质最贴的一个;不要默认选 clean,也不要每张都选胶片;',
+        '2) 画面里有明显人物肤色时,避开青橙(tealorange)、赛博(cyber)、黑金(blackgold)这类强偏色;',
+        '3) 低调/夜景不要选空气感(airy)、白墙(whitewall)这类高调滤镜;',
+        '4) 纪实、文档、证件、图表类照片用 none;拿不准也用 none;',
+        '5) amount 表示强度:强风格 70~90,克制的 40~60;不确定就 70;',
+        '6) clean(通透)只留给「本身已经干净、没有明显气质」的画面;照片有明确气质(夜市/街头/胶片感/秋景/人像/食物)时,优先选更有性格的,别一瓶 clean 走天下;',
       ].join('\n'),
     },
     { type: 'image_url', image_url: { url: 'PLACEHOLDER' } },
@@ -183,6 +212,8 @@ export function normalizeAnalysis(raw) {
   // 模型只给语义意图;这里做轻量清洗(枚举值的严格归一化在客户端 intent.ts)
   const ri = r.intent && typeof r.intent === 'object' ? r.intent : {}
   const pickEnum = (v, list, def) => (typeof v === 'string' && list.includes(v) ? v : def)
+  // 滤镜:只接受目录里的 id(模型自创的一律作废,由客户端按题材兜底)
+  const rf = ri.filter && typeof ri.filter === 'object' ? ri.filter : {}
   const intent = {
     scene: pickEnum(ri.scene, INTENT_ENUMS.scene, DEFAULT_INTENT.scene),
     key: pickEnum(ri.key, INTENT_ENUMS.key, DEFAULT_INTENT.key),
@@ -195,6 +226,9 @@ export function normalizeAnalysis(raw) {
     brightness: clamp(Math.round(num(ri.brightness, 0)), -1, 1),
     punch: clamp(Math.round(num(ri.punch, 0)), -1, 1),
     warmth: clamp(Math.round(num(ri.warmth, 0)), -1, 1),
+    filter: typeof rf.id === 'string' && FILTER_IDS.includes(rf.id) ? rf.id : 'none',
+    filterAmount: Math.round(clamp(num(rf.amount, 100), 0, 100)),
+    filterWhy: str(rf.why, 60),
     styleHint: str(ri.styleHint, 20),
   }
 

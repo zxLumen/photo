@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AnalysisResult, ComposeId, CropRect, EditParams, PresetItem, SessionItem, StatusInfo, Subject, ToneParams } from './types.js'
+import type { AnalysisResult, ComposeId, CropRect, EditParams, FilterPick, PresetItem, SessionItem, StatusInfo, Subject, ToneParams } from './types.js'
 import { api } from './api.js'
 import { COMPOSITIONS, compositionLabel } from './lib/compose.js'
-import { mergeTone, emptyTone, applyLook, EV_SCALE } from './lib/autoTone.js'
-import { applyIntent, describeIntent, normalizeIntent } from './lib/intent.js'
+import { mergeTone, emptyTone, EV_SCALE } from './lib/autoTone.js'
+import { applyIntent, describeIntent, normalizeIntent, pickFilter } from './lib/intent.js'
+import { FILTERS } from './lib/filters.js'
 import { describeStats, type ImageStats } from './lib/imageStats.js'
 import { downscaleDataURL, loadImage, loadImageFile, sampleAutoTone } from './lib/imageOps.js'
 import { reportAiStatus, type AiState } from './embed.js'
@@ -34,8 +35,12 @@ export function App() {
   const [tone, setTone] = useState<ToneParams>(emptyTone())
   /** 实测基座(未叠加风格层);切换风格时以它为底重新叠加 */
   const [baseTone, setBaseTone] = useState<ToneParams>(emptyTone())
-  /** 叠加中的风格层 id(none = 不叠加) */
+  /** 叠加中的风格层 id(none = 不叠加)。仅用于读取 v2 旧存档 */
   const [lookId, setLookId] = useState('none')
+  /** 选中的滤镜 + 强度 */
+  const [filter, setFilter] = useState<FilterPick>({ id: 'none', amount: 100 })
+  const [filterSource, setFilterSource] = useState<'ai' | 'auto' | 'manual' | 'none'>('none')
+  const [filterWhy, setFilterWhy] = useState('')
   const [toneSource, setToneSource] = useState<'none' | 'auto' | 'manual'>('none')
   const [stats, setStats] = useState<ImageStats | null>(null)
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null)
@@ -94,15 +99,24 @@ export function App() {
       if (p.tone) {
         const t = mergeTone(p.tone)
         setTone(t)
-        if (p.v === 2) {
+        if (p.v === 2 || p.v === 3) {
           setBaseTone(p.baseTone ? mergeTone(p.baseTone) : t)
-          setLookId(p.style && p.style !== 'none' ? p.style : 'none')
+          // v2 存档里的 style 已经烘进 tone,只记录下来,不再重算
+          setLookId(p.v === 2 && p.style && p.style !== 'none' ? p.style : 'none')
         } else {
           // 旧版存档:style 已经烘进 tone,不能再叠一次
           setBaseTone(t)
           setLookId('none')
         }
         setToneSource(p.source ?? 'manual')
+      }
+      if (p.v === 3) {
+        setFilter({
+          id: p.filter && FILTERS[p.filter] ? p.filter : 'none',
+          amount: typeof p.filterAmount === 'number' ? p.filterAmount : 100,
+        })
+        setFilterSource(p.filterSource ?? 'manual')
+        setFilterWhy(p.filterWhy ?? '')
       }
       if (p.fileName) setFileName(p.fileName)
     }
@@ -125,11 +139,15 @@ export function App() {
       tone,
       baseTone,
       style: lookId,
+      filter: filter.id,
+      filterAmount: filter.amount,
+      filterWhy,
+      filterSource,
       source: toneSource,
-      v: 2,
+      v: 3,
       fileName,
     } satisfies Partial<EditParams> & { fileName: string })
-  }, [crop, rotate, composition, subjects, tone, baseTone, lookId, toneSource, fileName])
+  }, [crop, rotate, composition, subjects, tone, baseTone, lookId, filter, filterWhy, filterSource, toneSource, fileName])
 
   const refreshSessions = useCallback(() => {
     api.sessions().then((r) => setSessions(r.items)).catch(() => {})
@@ -164,6 +182,11 @@ export function App() {
         setTone(t)
         setLookId('none')
         setToneSource('auto')
+        // 滤镜:模型给语义选择,客户端再过护栏/兜底
+        const fc = pickFilter(a.intent, s)
+        setFilter({ id: fc.id, amount: fc.amount })
+        setFilterSource(fc.source)
+        setFilterWhy(fc.why)
         setTab('compose')
         setAi('success', '构图分析完成')
       } catch (e) {
@@ -195,6 +218,9 @@ export function App() {
         setBaseTone(emptyTone())
         setLookId('none')
         setToneSource('none')
+        setFilter({ id: 'none', amount: 100 })
+        setFilterSource('none')
+        setFilterWhy('')
         setStats(null)
         setAnalysis(null)
         setTab('compose')
@@ -245,6 +271,10 @@ export function App() {
     setTone(t)
     setLookId('none')
     setToneSource('auto')
+    const fc = pickFilter(analysis?.intent ?? null, s)
+    setFilter({ id: fc.id, amount: fc.amount })
+    setFilterSource(fc.source)
+    setFilterWhy(fc.why)
     setAi('success', '已按本图测算')
   }, [image, rotate, crop, analysis, setAi])
 
@@ -278,19 +308,18 @@ export function App() {
     setToneSource('manual')
   }, [])
 
-  /** 风格 = 在实测基座上加一层 look(可开关),不再整组替换 */
-  const chooseLook = useCallback(
-    (id: string) => {
-      if (id === 'none' || id === lookId) {
-        setLookId('none')
-        setTone(baseTone)
-        return
-      }
-      setLookId(id)
-      setTone(applyLook(baseTone, id))
-    },
-    [lookId, baseTone],
-  )
+  /** 手动换滤镜:不动调色参数(滤镜是独立一层) */
+  const chooseFilter = useCallback((id: string) => {
+    const next = id === 'none' ? 'none' : FILTERS[id] ? id : 'none'
+    setFilter((prev) => ({ id: next, amount: next === 'none' ? 0 : prev.amount > 0 ? prev.amount : 100 }))
+    setFilterSource(next === 'none' ? 'none' : 'manual')
+    setFilterWhy('')
+  }, [])
+
+  const changeFilterAmount = useCallback((amount: number) => {
+    setFilter((prev) => ({ ...prev, amount: Math.max(0, Math.min(100, Math.round(amount))) }))
+    setFilterSource((s) => (s === 'none' ? 'manual' : s))
+  }, [])
 
   /* ---------------- 作品 / 预设 ---------------- */
 
@@ -309,7 +338,11 @@ export function App() {
           style: lookId,
           baseTone,
           source: toneSource,
-          v: 2,
+          filter: filter.id,
+          filterAmount: filter.amount,
+          filterWhy,
+          filterSource,
+          v: 3,
         }
         await api.saveSession({ name, thumb, params, analysis })
         refreshSessions()
@@ -319,7 +352,7 @@ export function App() {
         setBusy('')
       }
     },
-    [image, crop, rotate, composition, subjects, tone, lookId, baseTone, toneSource, analysis, refreshSessions],
+    [image, crop, rotate, composition, subjects, tone, lookId, baseTone, toneSource, filter, filterWhy, filterSource, analysis, refreshSessions],
   )
 
   const openSession = useCallback((s: SessionItem) => {
@@ -330,13 +363,26 @@ export function App() {
       setSubjects(s.params.subjects ?? [])
       const t = mergeTone(s.params.tone)
       setTone(t)
-      if (s.params.v === 2) {
+      if (s.params.v === 2 || s.params.v === 3) {
         setBaseTone(s.params.baseTone ? mergeTone(s.params.baseTone) : t)
-        setLookId(s.params.style && s.params.style !== 'none' ? s.params.style : 'none')
+        setLookId(s.params.v === 2 && s.params.style && s.params.style !== 'none' ? s.params.style : 'none')
       } else {
         // 旧存档:style 已烘进 tone
         setBaseTone(t)
         setLookId('none')
+      }
+      if (s.params.v === 3) {
+        setFilter({
+          id: s.params.filter && FILTERS[s.params.filter] ? s.params.filter : 'none',
+          amount: typeof s.params.filterAmount === 'number' ? s.params.filterAmount : 100,
+        })
+        setFilterSource(s.params.filterSource ?? 'manual')
+        setFilterWhy(s.params.filterWhy ?? '')
+      } else {
+        // v2 及更早:风格已经烘进 tone,不额外叠滤镜
+        setFilter({ id: 'none', amount: 100 })
+        setFilterSource('none')
+        setFilterWhy('')
       }
       setToneSource(s.params.source ?? 'manual')
     }
@@ -364,10 +410,10 @@ export function App() {
 
   const savePreset = useCallback(
     async (name: string) => {
-      await api.savePreset({ name, tone, style: lookId }).catch(() => {})
+      await api.savePreset({ name, tone, style: lookId, filter: filter.id, filterAmount: filter.amount }).catch(() => {})
       refreshPresets()
     },
-    [tone, lookId, refreshPresets],
+    [tone, lookId, filter, refreshPresets],
   )
 
   const applyPreset = useCallback((p: PresetItem) => {
@@ -377,6 +423,9 @@ export function App() {
     setBaseTone(t)
     setLookId('none')
     setToneSource('manual')
+    setFilter({ id: p.filter && FILTERS[p.filter] ? p.filter : 'none', amount: p.filterAmount ?? 100 })
+    setFilterSource(p.filter ? 'manual' : 'none')
+    setFilterWhy('')
   }, [])
 
   const deletePreset = useCallback(
@@ -477,7 +526,7 @@ export function App() {
           <>
             <section className="canvas-col">
               {compare ? (
-                <CompareView image={image} rotate={rotate} crop={crop} tone={tone} />
+                <CompareView image={image} rotate={rotate} crop={crop} tone={tone} filter={filter} />
               ) : (
                 <CropStage
                   image={image}
@@ -486,6 +535,7 @@ export function App() {
                   composition={composition}
                   subjects={subjects}
                   tone={tone}
+                  filter={filter}
                   showOriginal={holdOriginal}
                   onCrop={setCrop}
                 />
@@ -608,12 +658,18 @@ export function App() {
                 {tab === 'adjust' && (
                   <AdjustPanel
                     tone={tone}
-                    look={lookId}
+                    filter={filter}
+                    filterSource={filterSource}
+                    filterWhy={filterWhy}
                     source={toneSource}
                     diagnosis={stats ? describeStats(stats, (tone.exposure * EV_SCALE) / 100) : ''}
                     intentText={analysis ? describeIntent(analysis.intent) : ''}
+                    image={image}
+                    rotate={rotate}
+                    crop={crop}
                     onChange={changeTone}
-                    onLook={chooseLook}
+                    onFilter={chooseFilter}
+                    onFilterAmount={changeFilterAmount}
                     onAuto={runAutoTone}
                     onReset={resetTone}
                   />
@@ -639,7 +695,7 @@ export function App() {
       </main>
 
       {showExport && image && (
-        <ExportDialog image={image} rotate={rotate} crop={crop} tone={tone} fileBase={fileName || 'photo'} onClose={() => setShowExport(false)} />
+        <ExportDialog image={image} rotate={rotate} crop={crop} tone={tone} filter={filter} fileBase={fileName || 'photo'} onClose={() => setShowExport(false)} />
       )}
 
       {showSamples && (

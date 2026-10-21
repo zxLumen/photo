@@ -1,0 +1,71 @@
+{
+  "groups": [
+    { "id": "basic", "label": "基础" },
+    { "id": "film", "label": "胶片" },
+    { "id": "jp", "label": "日系" },
+    { "id": "cinema", "label": "电影" },
+    { "id": "retro", "label": "复古" },
+    { "id": "bw", "label": "黑白" },
+    { "id": "subject", "label": "题材" }
+  ],
+  "items": [
+    { "id": "none", "name": "原片", "group": "basic", "hint": "不套滤镜,只保留按本图测算的调色" },
+    { "id": "clean", "name": "通透", "group": "basic", "hint": "去灰、提通透,通用不挑片" },
+    { "id": "soft", "name": "柔和", "group": "basic", "hint": "降低反差,过渡柔和" },
+    { "id": "punch", "name": "浓郁", "group": "basic", "hint": "提高反差与饱和度" },
+    { "id": "crisp", "name": "高反差", "group": "basic", "hint": "强对比、干净锐利" },
+
+    { "id": "portra400", "name": "波特拉 400", "group": "film", "hint": "人像肤色,暖而柔和的负片" },
+    { "id": "gold200", "name": "金 200", "group": "film", "hint": "暖黄日常,怀旧阳光" },
+    { "id": "ektar100", "name": "埃克塔 100", "group": "film", "hint": "浓郁风景,冷调阴影" },
+    { "id": "pro400h", "name": "富士 400H", "group": "film", "hint": "清淡空气感,青绿阴影" },
+    { "id": "c200", "name": "富士 C200", "group": "film", "hint": "消费卷,偏绿的中间调" },
+    { "id": "classicchrome", "name": "经典正片", "group": "film", "hint": "纪实低饱和,偏冷克制" },
+    { "id": "velvia", "name": "维纳斯", "group": "film", "hint": "高饱和风光,浓烈红绿" },
+    { "id": "cinestill800t", "name": "电影卷 800T", "group": "film", "hint": "夜景钨丝灯,青蓝配红晕" },
+    { "id": "polaroid", "name": "宝丽来", "group": "film", "hint": "褪色发白,暖黄拍立得" },
+    { "id": "oldfilm", "name": "老胶卷", "group": "film", "hint": "褐调褪色,颗粒重" },
+    { "id": "trix", "name": "三X 黑白", "group": "film", "hint": "硬朗黑白,经典高感卷" },
+    { "id": "hp5", "name": "伊尔福 HP5", "group": "film", "hint": "柔和黑白,颗粒明显" },
+
+    { "id": "japanese", "name": "日系", "group": "jp", "hint": "明亮低反差,青绿阴影" },
+    { "id": "airy", "name": "空气感", "group": "jp", "hint": "高调通透,清淡留白" },
+    { "id": "cream", "name": "奶油", "group": "jp", "hint": "奶白高光,柔和不刺眼" },
+    { "id": "sakura", "name": "樱", "group": "jp", "hint": "粉色高光,柔美" },
+    { "id": "mint", "name": "薄荷", "group": "jp", "hint": "青绿清新,适合夏天" },
+    { "id": "whitewall", "name": "白墙", "group": "jp", "hint": "高调干净,低饱和" },
+
+    { "id": "tealorange", "name": "青橙", "group": "cinema", "hint": "电影感,青蓝阴影配暖橙高光" },
+    { "id": "darkcinema", "name": "暗夜", "group": "cinema", "hint": "压暗黑场,冷调氛围" },
+    { "id": "silver", "name": "银幕", "group": "cinema", "hint": "银灰低饱和,高反差" },
+    { "id": "twilight", "name": "暮光", "group": "cinema", "hint": "紫粉阴影配暖高光" },
+    { "id": "cyber", "name": "赛博霓虹", "group": "cinema", "hint": "洋红青蓝,霓虹夜景" },
+    { "id": "blackgold", "name": "黑金", "group": "cinema", "hint": "近黑白配金色高光" },
+    { "id": "cold", "name": "冷峻", "group": "cinema", "hint": "冷蓝克制,纪实感" },
+    { "id": "hongkong", "name": "港风", "group": "cinema", "hint": "青绿偏色,复古市井" },
+
+    { "id": "oldphoto", "name": "老照片", "group": "retro", "hint": "棕褐褪色,暗角颗粒" },
+    { "id": "faded", "name": "褪色", "group": "retro", "hint": "低反差,黑场浮起" },
+    { "id": "sepia", "name": "棕褐", "group": "retro", "hint": "经典棕褐单色" },
+    { "id": "nineties", "name": "90 年代", "group": "retro", "hint": "暖黄低反差,颗粒" },
+    { "id": "cassette", "name": "磁带", "group": "retro", "hint": "洋红青移,褪色录像带" },
+    { "id": "newsprint", "name": "旧报纸", "group": "retro", "hint": "低饱和冷灰,硬朗" },
+
+    { "id": "bw", "name": "中性黑白", "group": "bw", "hint": "标准黑白,层次完整" },
+    { "id": "bwcontrast", "name": "高反差黑白", "group": "bw", "hint": "强对比黑白,硬光" },
+    { "id": "bwsoft", "name": "柔光黑白", "group": "bw", "hint": "低反差黑白,柔和" },
+    { "id": "bwselenium", "name": "硒调", "group": "bw", "hint": "紫褐调黑白,收藏级" },
+    { "id": "bwblue", "name": "蓝调黑白", "group": "bw", "hint": "冷蓝调黑白" },
+
+    { "id": "mountain", "name": "山川", "group": "subject", "hint": "冷绿深蓝,山野风光" },
+    { "id": "coast", "name": "海岸", "group": "subject", "hint": "青蓝通透,海边" },
+    { "id": "autumn", "name": "秋色", "group": "subject", "hint": "橙红金黄,秋日" },
+    { "id": "snow", "name": "雪原", "group": "subject", "hint": "冷白干净,雪地" },
+    { "id": "forest", "name": "森林", "group": "subject", "hint": "深绿冷阴影,林间" },
+    { "id": "citynight", "name": "城市夜景", "group": "subject", "hint": "蓝调阴影配暖灯" },
+    { "id": "creamskin", "name": "奶油肌", "group": "subject", "hint": "人像肤色,柔暖通透" },
+    { "id": "brightskin", "name": "通透肤色", "group": "subject", "hint": "人像,干净透亮" },
+    { "id": "warmfood", "name": "暖食", "group": "subject", "hint": "美食,暖橙有食欲" },
+    { "id": "freshfood", "name": "鲜食", "group": "subject", "hint": "美食,清爽高饱和" }
+  ]
+}

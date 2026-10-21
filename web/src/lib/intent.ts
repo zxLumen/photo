@@ -1,6 +1,7 @@
 import type { AiIntent, ToneParams } from '../types.js'
 import { KEYS, MOODS, NOISE_LEVELS, PROTECT_TAGS, SCENES } from '../types.js'
 import { mergeTone } from './autoTone.js'
+import { FILTER_IDS, filterName, getFilter } from './filters.js'
 import type { ImageStats } from './imageStats.js'
 
 const pick = <T extends string>(v: unknown, list: readonly T[], def: T): T =>
@@ -12,12 +13,15 @@ const tri = (v: unknown): -1 | 0 | 1 => {
   return n >= 1 ? 1 : n <= -1 ? -1 : 0
 }
 
+const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n))
+
 /** 校验并收敛模型返回的语义意图(非法枚举一律回落默认) */
 export function normalizeIntent(raw: unknown): AiIntent {
   const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
   const protect = Array.isArray(r.protect)
     ? Array.from(new Set(r.protect.filter((p): p is string => typeof p === 'string').filter((p) => (PROTECT_TAGS as readonly string[]).includes(p)))).slice(0, 5)
     : []
+  const amount = Number(r.filterAmount)
   return {
     scene: pick(r.scene, SCENES, 'other'),
     key: pick(r.key, KEYS, 'normal'),
@@ -28,6 +32,10 @@ export function normalizeIntent(raw: unknown): AiIntent {
     brightness: tri(r.brightness),
     punch: tri(r.punch),
     warmth: tri(r.warmth),
+    // 只认目录里的 id:模型编一个不存在的名字一律作废,交给 fallbackFilter 兜底
+    filter: pick(r.filter, FILTER_IDS, 'none'),
+    filterAmount: Number.isFinite(amount) ? Math.round(clamp(amount, 0, 100)) : 100,
+    filterWhy: typeof r.filterWhy === 'string' ? r.filterWhy.slice(0, 60) : '',
     styleHint: typeof r.styleHint === 'string' ? r.styleHint.slice(0, 20) : '',
   }
 }
@@ -59,7 +67,116 @@ export function describeIntent(i: AiIntent): string {
   const parts = [SCENE_LABEL[i.scene] ?? '其他', KEY_LABEL[i.key] ?? '中性', MOOD_LABEL[i.mood] ?? '自然']
   if (i.skin) parts.push('护肤色')
   if (i.noise !== 'none') parts.push(NOISE_LABEL[i.noise] ?? '')
+  if (i.filter && i.filter !== 'none') parts.push(`滤镜 ${filterName(i.filter)}`)
   return parts.filter(Boolean).join(' · ')
+}
+
+/* ------------------------------------------------------------------ */
+/* 滤镜选择:模型给语义,客户端做护栏与兜底                              */
+/* ------------------------------------------------------------------ */
+
+/** 高调滤镜:套在低调(欠曝/夜景)照片上会把氛围洗掉 */
+const HIGH_KEY_ONLY = new Set(['airy', 'whitewall', 'japanese', 'brightskin', 'snow', 'mint'])
+/** 强偏色滤镜:画面里有肤色时容易把脸染花 */
+const SKIN_UNSAFE = new Set(['cyber', 'tealorange', 'blackgold', 'cassette', 'oldfilm', 'twilight'])
+
+export interface FilterChoice {
+  id: string
+  amount: number
+  why: string
+  source: 'ai' | 'auto' | 'none'
+}
+
+/**
+ * 模型没给、或给了不存在的 id 时的兜底:
+ * 按题材 + 情绪选一个语义最贴的,保证「任何照片都有个合理落点」。
+ */
+export function fallbackFilter(i: AiIntent): string {
+  if (i.protect.includes('vintage')) return 'faded'
+  switch (i.scene) {
+    case 'portrait':
+      return i.mood === 'dramatic' ? 'bwcontrast' : i.mood === 'filmic' ? 'portra400' : i.mood === 'vivid' ? 'brightskin' : 'creamskin'
+    case 'food':
+      return i.key === 'low' || i.mood === 'dramatic' ? 'warmfood' : 'freshfood'
+    case 'night':
+      return i.mood === 'dramatic' ? 'cyber' : i.mood === 'filmic' ? 'cinestill800t' : 'citynight'
+    case 'street':
+      return i.mood === 'filmic' ? 'hongkong' : i.mood === 'dramatic' ? 'bwcontrast' : 'cinestill800t'
+    case 'architecture':
+      return i.mood === 'clean' ? 'crisp' : i.mood === 'filmic' ? 'classicchrome' : 'cold'
+    case 'macro':
+      return i.mood === 'muted' ? 'soft' : 'clean'
+    case 'landscape':
+      if (i.key === 'high') return 'airy'
+      if (i.protect.includes('warm-sunset')) return 'twilight'
+      if (i.mood === 'vivid') return 'velvia'
+      if (i.mood === 'filmic') return 'ektar100'
+      if (i.mood === 'muted') return 'pro400h'
+      if (i.mood === 'dramatic') return 'bwcontrast'
+      return 'mountain'
+    default:
+      break
+  }
+  switch (i.mood) {
+    case 'filmic':
+      return 'portra400'
+    case 'muted':
+      return 'faded'
+    case 'vivid':
+      return 'punch'
+    case 'dramatic':
+      return 'bwcontrast'
+    case 'clean':
+      return 'clean'
+    default:
+      return 'clean'
+  }
+}
+
+/**
+ * 定稿滤镜:优先用模型选的(必须是目录里的 id),再过三道护栏:
+ *  - 文档不加滤镜;
+ *  - 低调系照片不套高调滤镜;
+ *  - 有肤色不套强偏色滤镜;
+ *  - 噪点重 → 颗粒类滤镜压强度。
+ */
+export function pickFilter(intent: AiIntent | null | undefined, stats?: ImageStats | null): FilterChoice {
+  if (!intent) return { id: 'none', amount: 0, why: '', source: 'none' }
+  if (intent.scene === 'document') return { id: 'none', amount: 0, why: '文档类照片不加滤镜,避免影响可读性', source: 'none' }
+
+  const def = getFilter(intent.filter)
+  const fromAi = intent.filter !== 'none' && def.id === intent.filter
+  let id = fromAi ? def.id : fallbackFilter(intent)
+  let why = fromAi ? intent.filterWhy : ''
+  let source: FilterChoice['source'] = fromAi ? 'ai' : 'auto'
+
+  if (intent.key === 'low' && HIGH_KEY_ONLY.has(id)) {
+    id = fallbackFilter({ ...intent, key: 'normal' })
+    why = ''
+    source = 'auto'
+  }
+  if (intent.skin && SKIN_UNSAFE.has(id)) {
+    id = fallbackFilter({ ...intent, scene: 'portrait' })
+    why = ''
+    source = 'auto'
+  }
+  // 模型嘴上说「胶片/淡雅/浓郁/戏剧」,却选了最中性的「通透」——
+  // 说明画面有明显气质,按它自己判的情绪挑个更有性格的,别浪费 52 个滤镜。
+  if (id === 'clean' && intent.mood !== 'natural' && intent.mood !== 'clean') {
+    const alt = fallbackFilter(intent)
+    if (alt !== 'none') {
+      id = alt
+      why = ''
+      source = 'auto'
+    }
+  }
+  if (id === 'none') return { id: 'none', amount: 0, why: '', source: 'none' }
+
+  const noise = stats ? stats.noise : intent.noise === 'heavy' ? 0.5 : intent.noise === 'light' ? 0.2 : 0
+  let amount = source === 'ai' ? clamp(intent.filterAmount, 40, 100) : 100
+  if (getFilter(id).grain > 0.15 && noise > 0.3) amount = Math.min(amount, 60)
+  if (!why) why = getFilter(id).hint
+  return { id, amount: Math.round(amount), why, source }
 }
 
 /**

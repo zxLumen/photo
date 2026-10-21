@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeAnalysis, extractJson, INTENT_ENUMS, DEFAULT_INTENT } from '../lib/analysis.js'
+import { normalizeAnalysis, extractJson, buildMessages, INTENT_ENUMS, DEFAULT_INTENT } from '../lib/analysis.js'
 
 test('extractJson 解析裸 JSON', () => {
   assert.deepEqual(extractJson('{"a":1}'), { a: 1 })
@@ -87,6 +87,7 @@ test('normalizeAnalysis 接受合法值', () => {
       brightness: 1,
       punch: -1,
       warmth: 0,
+      filter: { id: 'portra400', amount: 85, why: '肤色柔和' },
       styleHint: '人像',
     },
     reason: '理由',
@@ -106,6 +107,9 @@ test('normalizeAnalysis 接受合法值', () => {
     brightness: 1,
     punch: -1,
     warmth: 0,
+    filter: 'portra400',
+    filterAmount: 85,
+    filterWhy: '肤色柔和',
     styleHint: '人像',
   })
   assert.equal(a.reason, '理由')
@@ -118,4 +122,35 @@ test('意图枚举与前端保持一致的形状(至少非空且唯一)', () => 
   }
   assert.ok(INTENT_ENUMS.protect.includes('dark-mood'))
   assert.equal(INTENT_ENUMS.key.includes('normal'), true)
+})
+
+test('滤镜:只接受目录里的 id,自创的作废为 none', () => {
+  const ok = normalizeAnalysis({ intent: { filter: { id: 'tealorange', amount: 70, why: '夜景' } } })
+  assert.equal(ok.intent.filter, 'tealorange')
+  assert.equal(ok.intent.filterAmount, 70)
+  assert.equal(ok.intent.filterWhy, '夜景')
+
+  const bad = normalizeAnalysis({ intent: { filter: { id: 'not-a-filter', amount: 70 } } })
+  assert.equal(bad.intent.filter, 'none', '不存在的 id 不能被透传')
+  assert.equal(bad.intent.filterWhy, '')
+
+  // 兼容模型把 filter 直接写成字符串的老格式
+  const str = normalizeAnalysis({ intent: { filter: 'bw' } })
+  assert.equal(str.intent.filter, 'none', '非对象格式一律作废,交给客户端兜底')
+})
+
+test('滤镜:强度夹到 0..100,缺省 100', () => {
+  assert.equal(normalizeAnalysis({ intent: { filter: { id: 'bw', amount: 999 } } }).intent.filterAmount, 100)
+  assert.equal(normalizeAnalysis({ intent: { filter: { id: 'bw', amount: -5 } } }).intent.filterAmount, 0)
+  assert.equal(normalizeAnalysis({ intent: { filter: { id: 'bw' } } }).intent.filterAmount, 100)
+})
+
+test('提示词里带上了完整滤镜清单(模型才知道有哪些可选)', () => {
+  const msgs = buildMessages({ width: 800, height: 600 })
+  const text = msgs[1].content[0].text
+  assert.ok(text.includes('滤镜清单'), '提示词应有滤镜清单')
+  for (const id of ['portra400', 'tealorange', 'bwselenium', 'creamskin', 'none']) {
+    assert.ok(text.includes(`${id}(`), `清单里缺少 ${id}`)
+  }
+  assert.ok(text.includes('"filter"'), 'JSON 结构里应有 filter 字段')
 })

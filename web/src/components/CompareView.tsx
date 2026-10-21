@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { CropRect, ToneParams } from '../types.js'
+import type { CropRect, FilterPick, ToneParams } from '../types.js'
 import { ColorRenderer } from '../lib/colorPipeline.js'
 import { fitWithin, renderCrop } from '../lib/imageOps.js'
 
@@ -8,6 +8,7 @@ interface Props {
   rotate: number
   crop: CropRect
   tone: ToneParams
+  filter: FilterPick
 }
 
 /**
@@ -16,7 +17,7 @@ interface Props {
  *  右 = 修后 · 裁剪 + 旋转 + 调色(与导出完全一致)
  * 两侧都按各自比例铺满半边,能同时看出「裁掉了什么」与「颜色变了什么」。
  */
-export function CompareView({ image, rotate, crop, tone }: Props) {
+export function CompareView({ image, rotate, crop, tone, filter }: Props) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const beforeRef = useRef<HTMLCanvasElement | null>(null)
   const afterRef = useRef<HTMLCanvasElement | null>(null)
@@ -73,7 +74,7 @@ export function CompareView({ image, rotate, crop, tone }: Props) {
     const geom = renderCrop(image, rotate, crop, Math.round(w * dpr), Math.round(h * dpr))
     if (r.supported) {
       r.setSource(geom, geom.width, geom.height)
-      r.render(tone)
+      r.render(tone, filter)
       c.style.width = `${w}px`
       c.style.height = `${h}px`
     } else {
@@ -84,7 +85,7 @@ export function CompareView({ image, rotate, crop, tone }: Props) {
       const ctx = c.getContext('2d')
       if (ctx) ctx.drawImage(geom, 0, 0)
     }
-  }, [image, rotate, crop, tone, paneW, paneH, dpr, box.w])
+  }, [image, rotate, crop, tone, filter, paneW, paneH, dpr, box.w])
 
   return (
     <div className="compare-wrap" ref={wrapRef}>

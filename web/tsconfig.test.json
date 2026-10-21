@@ -9,5 +9,5 @@
     "noUnusedParameters": false,
     "types": []
   },
-  "include": ["src/lib/autoTone.ts", "src/lib/intent.ts", "src/lib/imageStats.ts", "src/types.ts", "test-lib"]
+  "include": ["src/lib/autoTone.ts", "src/lib/intent.ts", "src/lib/filters.ts", "src/lib/imageStats.ts", "src/types.ts", "test-lib"]
 }

@@ -30,6 +30,12 @@ export interface ToneParams {
   vignette: number
 }
 
+/** 选中的滤镜:id + 强度(0..100) */
+export interface FilterPick {
+  id: string
+  amount: number
+}
+
 export const SCENES = ['portrait', 'landscape', 'night', 'street', 'food', 'architecture', 'macro', 'document', 'other'] as const
 export type Scene = (typeof SCENES)[number]
 
@@ -64,6 +70,12 @@ export interface AiIntent {
   punch: -1 | 0 | 1
   /** 粗方向:更冷 / 不变 / 更暖 */
   warmth: -1 | 0 | 1
+  /** AI 选的滤镜 id(必须在 filters.json 目录里;'none' = 不套) */
+  filter: string
+  /** 滤镜强度 0..100 */
+  filterAmount: number
+  /** AI 为什么选这个滤镜(一句话) */
+  filterWhy: string
   /** 建议的风格(仅提示,不自动套用) */
   styleHint: string
 }
@@ -91,11 +103,19 @@ export interface EditParams {
   tone: ToneParams
   /** 叠加中的风格 id(none = 不叠加)。字段名沿用旧版的 style 以兼容存档 */
   style: string
+  /** 滤镜 id(none = 不套) */
+  filter?: string
+  /** 滤镜强度 0..100 */
+  filterAmount?: number
+  /** AI 选滤镜的理由(展示用) */
+  filterWhy?: string
+  /** 滤镜来源:ai = 模型选的;auto = 客户端按题材兜底;manual = 手动换的 */
+  filterSource?: 'ai' | 'auto' | 'manual' | 'none'
   /** 实测基座(未叠加风格);用于切换风格层时重新叠加 */
   baseTone?: ToneParams
   /** 参数来源:auto = 按本图测算;manual = 手动调整过;none = 未调色 */
   source?: 'auto' | 'manual' | 'none'
-  /** 参数结构版本:2 = 实测基座 + 叠加风格(1/undefined = 旧版,style 已烘进 tone) */
+  /** 参数结构版本:3 = 实测基座 + 滤镜;2 = 基座 + 参数型风格;1 = 旧版 */
   v?: number
 }
 
@@ -115,6 +135,9 @@ export interface PresetItem {
   name: string
   tone: Partial<ToneParams>
   style: string
+  /** 预设里的滤镜 */
+  filter?: string
+  filterAmount?: number
   createdAt: number
 }
 
