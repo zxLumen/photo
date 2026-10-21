@@ -8,8 +8,16 @@ export const COMPOSITIONS = ['thirds', 'golden', 'center', 'diagonal', 'triangle
 /**
  * 滤镜目录与前端**共用同一份 JSON**(`src/lib/filters.json`),
  * 提示词、校验、前端配方因此不会各写一套而漂移。
+ *
+ * 读不到时**不拖垮服务**:退化成一空目录(模型没法挑滤镜),
+ * 客户端仍会按题材兜底选一个,功能只是少一点「AI 定制」。
  */
-const FILTER_CATALOG = JSON.parse(readFileSync(fileURLToPath(new URL('../src/lib/filters.json', import.meta.url)), 'utf8'))
+let FILTER_CATALOG = { groups: [], items: [] }
+try {
+  FILTER_CATALOG = JSON.parse(readFileSync(fileURLToPath(new URL('../src/lib/filters.json', import.meta.url)), 'utf8'))
+} catch (e) {
+  console.error('[photo] 滤镜目录读取失败,自动修图将退回「按题材兜底」:', e.message)
+}
 export const FILTER_IDS = FILTER_CATALOG.items.map((i) => i.id)
 const FILTER_LINES = FILTER_CATALOG.groups
   .map((g) => {
