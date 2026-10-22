@@ -56,6 +56,12 @@ uniform float u_filterOn;
 uniform float u_filterAmount;
 uniform float u_grain;
 uniform float u_filterVignette;
+uniform float u_fxSoft;
+uniform float u_fxLocal;
+uniform float u_fxBloom;
+uniform float u_fxWarm;
+uniform float u_fxLeak;
+uniform float u_fxCA;
 
 float luma(vec3 c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; }
 
@@ -135,6 +141,16 @@ float shoulder(float x, float knee) {
   return x <= knee ? x : knee + (1.0 - knee) * (1.0 - exp(-(x - knee) / max(1.0 - knee, 1e-4)));
 }
 
+/* 大半径模糊(5 抽头):柔焦 / 局部对比 / 光晕用,半径由 r 控制 */
+vec3 wideBlur(vec2 uv, vec2 r) {
+  vec3 s = texture2D(u_image, uv).rgb * 0.4;
+  s += texture2D(u_image, uv + vec2(r.x, 0.0)).rgb * 0.15;
+  s += texture2D(u_image, uv - vec2(r.x, 0.0)).rgb * 0.15;
+  s += texture2D(u_image, uv + vec2(0.0, r.y)).rgb * 0.15;
+  s += texture2D(u_image, uv - vec2(0.0, r.y)).rgb * 0.15;
+  return s;
+}
+
 /* 高斯权重(自己平方,避免 pow(负数)) */
 float gw(float d, float c, float s) {
   float t = (d - c) / s;
@@ -142,7 +158,28 @@ float gw(float d, float c, float s) {
 }
 
 void main() {
-  vec3 src = texture2D(u_image, v_uv).rgb;
+  vec2 dv0 = v_uv - vec2(0.5, 0.5);
+
+  /* ---- 0. 边缘色散:按半径把 R/B 错开一点点(只在高潮流的滤镜里开) ---- */
+  vec3 src;
+  if (u_fxCA > 0.001) {
+    float k = u_fxCA * 0.012 * dot(dv0, dv0);
+    src.r = texture2D(u_image, v_uv + dv0 * k).r;
+    src.g = texture2D(u_image, v_uv).g;
+    src.b = texture2D(u_image, v_uv - dv0 * k).b;
+  } else {
+    src = texture2D(u_image, v_uv).rgb;
+  }
+
+  /* ---- 0.5 柔焦 / HDR 局部对比:放在调色之前,让色调曲线把它们一起收进去 ---- */
+  if (u_fxSoft > 0.001) {
+    src = mix(src, wideBlur(v_uv, u_texel * 3.0), u_fxSoft * 0.5);
+  }
+  if (u_fxLocal > 0.001) {
+    vec3 lbase = wideBlur(v_uv, u_texel * 12.0);
+    src = clamp(src + (src - lbase) * u_fxLocal * 0.65, 0.0, 1.0);
+  }
+
   vec3 outC = src;
 
   if (u_identity < 0.5) {
@@ -215,6 +252,21 @@ void main() {
   if (u_filterOn > 0.5) {
     vec3 look = lutLookup(outC);
     outC = mix(outC, look, u_filterAmount);
+
+    /* 高光光晕:亮部往四周“洇”出来一点,皮肤/灯会显得透 */
+    if (u_fxBloom > 0.001) {
+      vec3 b = wideBlur(v_uv, u_texel * 4.0) * 0.55 + wideBlur(v_uv, u_texel * 14.0) * 0.45;
+      vec3 glow = max(b - 0.58, 0.0) * 2.4;
+      glow *= mix(vec3(1.0), vec3(1.0, 0.72, 0.5), u_fxWarm);
+      outC += glow * u_fxBloom;
+    }
+
+    /* 漏光:右上角的暖色渐变(程序化,不用贴图) */
+    if (u_fxLeak > 0.001) {
+      float g = clamp(v_uv.x * 0.75 + (1.0 - v_uv.y) * 0.55 - 0.4, 0.0, 1.0);
+      outC += vec3(1.0, 0.52, 0.34) * g * g * u_fxLeak * 0.45;
+    }
+
     /* 1/255 抖动:33³ LUT 在天空渐变上可能出现色带,这点噪声肉眼不可见但能打散 */
     outC += (hash21(v_uv / max(u_texel, vec2(1e-6))) - 0.5) / 255.0;
 
@@ -286,6 +338,12 @@ const UNIFORM_NAMES = [
   'u_filterAmount',
   'u_grain',
   'u_filterVignette',
+  'u_fxSoft',
+  'u_fxLocal',
+  'u_fxBloom',
+  'u_fxWarm',
+  'u_fxLeak',
+  'u_fxCA',
 ] as const
 
 const TONE_KEYS = [
@@ -471,10 +529,19 @@ export class ColorRenderer {
 
       // ---- 滤镜:一次 LUT 采样 + 空间效果 ----
       const on = !!filter && filter.id !== 'none' && filter.amount > 0
+      const fx = on ? getFilter(filter.id).fx : null
+      const amt = on ? Math.min(1, filter.amount / 100) : 0
       gl.uniform1f(this.u.u_filterOn ?? null, on ? 1 : 0)
-      gl.uniform1f(this.u.u_filterAmount ?? null, on ? Math.min(1, filter.amount / 100) : 0)
-      gl.uniform1f(this.u.u_grain ?? null, on ? getFilter(filter.id).grain : 0)
-      gl.uniform1f(this.u.u_filterVignette ?? null, on ? getFilter(filter.id).vignette : 0)
+      gl.uniform1f(this.u.u_filterAmount ?? null, amt)
+      gl.uniform1f(this.u.u_grain ?? null, fx?.grain ?? 0)
+      gl.uniform1f(this.u.u_filterVignette ?? null, fx?.vignette ?? 0)
+      // 空间效果跟着强度一起收,强度 0 时完全不存在
+      gl.uniform1f(this.u.u_fxSoft ?? null, (fx?.soft ?? 0) * amt)
+      gl.uniform1f(this.u.u_fxLocal ?? null, (fx?.local ?? 0) * amt)
+      gl.uniform1f(this.u.u_fxBloom ?? null, (fx?.bloom ?? 0) * amt)
+      gl.uniform1f(this.u.u_fxWarm ?? null, fx?.warmBloom ?? 0)
+      gl.uniform1f(this.u.u_fxLeak ?? null, (fx?.leak ?? 0) * amt)
+      gl.uniform1f(this.u.u_fxCA ?? null, (fx?.ca ?? 0) * amt)
       if (on) {
         const key = `${filter.id}@${this.lutN}`
         let tex = this.lutTex.get(key)

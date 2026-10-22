@@ -77,17 +77,35 @@ test('灰阶必须单调:滤镜不能把亮部压得比暗部还暗', () => {
 })
 
 test('LUT 采样是确定的,且与配方方向一致', () => {
-  const a = sampleLut(lutOf('velvia'), [0.2, 0.6, 0.3])
-  const b = sampleLut(lutOf('velvia'), [0.2, 0.6, 0.3])
+  const sky: [number, number, number] = [0.45, 0.6, 0.75]
+  const a = sampleLut(lutOf('sky'), sky)
+  const b = sampleLut(lutOf('sky'), sky)
   assert.deepEqual(a, b)
-  // 维纳斯是高饱和卷:绿色通道应该被拉开
-  const g0 = 0.6
-  assert.ok(a[1] - a[0] > g0 - 0.2, '维纳斯应让绿色更突出')
+  // 晴空:蓝天要更蓝(蓝-绿的差被拉开)
+  assert.ok(a[2] - a[1] > sky[2] - sky[1], '晴空应让蓝色相对绿色更突出')
+})
+
+test('原片没有任何空间效果(恒等的另一半保证)', () => {
+  const fx = getFilter('none').fx
+  for (const [k, v] of Object.entries(fx)) assert.equal(v, 0, `原片的 ${k} 应为 0`)
+})
+
+test('空间效果都在 0..1,不会把画面炸掉', () => {
+  for (const f of FILTER_LIST) {
+    for (const [k, v] of Object.entries(f.fx)) {
+      assert.ok(v >= 0 && v <= 1, `${f.id}.${k} = ${v} 越界`)
+    }
+  }
+  // 潮流/复古那几个「有光」的滤镜必须真的带效果
+  assert.ok(getFilter('ccd').fx.bloom > 0 && getFilter('ccd').fx.ca > 0, 'CCD 应有光晕与色散')
+  assert.ok(getFilter('y2k').fx.leak > 0, '千禧应有漏光')
+  assert.ok(getFilter('water').fx.bloom > 0, '水光应有光晕')
+  assert.ok(getFilter('sky').fx.local > 0, '晴空应有 HDR 局部对比')
 })
 
 test('AI 选的滤镜 id 必须真实存在,不存在就作废', () => {
-  const ok = normalizeIntent({ filter: 'portra400', filterAmount: 80 })
-  assert.equal(ok.filter, 'portra400')
+  const ok = normalizeIntent({ filter: 'film', filterAmount: 80 })
+  assert.equal(ok.filter, 'film')
   assert.equal(ok.filterAmount, 80)
 
   const bad = normalizeIntent({ filter: 'super-cool-filter', filterAmount: 80 })
@@ -107,28 +125,28 @@ test('文档类照片不加滤镜', () => {
 })
 
 test('模型的选择被采纳(并带上理由)', () => {
-  const p = pickFilter(normalizeIntent({ scene: 'landscape', filter: 'velvia', filterAmount: 85, filterWhy: '草甸颜色浓' }))
-  assert.equal(p.id, 'velvia')
+  const p = pickFilter(normalizeIntent({ scene: 'landscape', filter: 'sky', filterAmount: 85, filterWhy: '天空很蓝' }))
+  assert.equal(p.id, 'sky')
   assert.equal(p.source, 'ai')
   assert.equal(p.amount, 85)
-  assert.equal(p.why, '草甸颜色浓')
+  assert.equal(p.why, '天空很蓝')
 })
 
 test('护栏:低调照片不套高调滤镜', () => {
-  const p = pickFilter(normalizeIntent({ scene: 'city', key: 'low', filter: 'airy', filterAmount: 90 }))
-  assert.notEqual(p.id, 'airy')
+  const p = pickFilter(normalizeIntent({ scene: 'city', key: 'low', filter: 'oxygen', filterAmount: 90 }))
+  assert.notEqual(p.id, 'oxygen')
   assert.equal(p.source, 'auto', '被护栏拦下后应转为按题材兜底')
 })
 
 test('护栏:有肤色时不套强偏色滤镜', () => {
   const p = pickFilter(normalizeIntent({ scene: 'portrait', skin: true, filter: 'cyber', filterAmount: 90 }))
   assert.notEqual(p.id, 'cyber')
-  assert.ok(['creamskin', 'brightskin', 'portra400', 'bwcontrast'].includes(p.id), `应回落到人像类滤镜,实际 ${p.id}`)
+  assert.ok(['creamskin', 'peach', 'coldwhite', 'oxygen', 'film', 'bwcontrast'].includes(p.id), `应回落到人像类滤镜,实际 ${p.id}`)
 })
 
 test('护栏:噪点重时颗粒类滤镜自动降强度', () => {
   const stats = { noise: 0.6 } as unknown as ImageStats
-  const p = pickFilter(normalizeIntent({ scene: 'street', filter: 'trix', filterAmount: 100 }), stats)
+  const p = pickFilter(normalizeIntent({ scene: 'street', filter: 'ccd', filterAmount: 100 }), stats)
   assert.ok(p.amount <= 60, `颗粒滤镜在噪点图上应压到 60 以内,实际 ${p.amount}`)
 })
 
@@ -163,11 +181,11 @@ test('注册表里没有的 id 会安全回落到原片', () => {
 })
 
 test('护栏:明明选了「通透」但情绪是胶片/浓郁,就按情绪换个更有性格的', () => {
-  const filmic = pickFilter(normalizeIntent({ scene: 'street', mood: 'filmic', filter: 'clean' }))
-  assert.notEqual(filmic.id, 'clean', '胶片情绪的街拍不该只剩通透')
-  const vivid = pickFilter(normalizeIntent({ scene: 'landscape', mood: 'vivid', filter: 'clean' }))
-  assert.notEqual(vivid.id, 'clean')
+  const filmic = pickFilter(normalizeIntent({ scene: 'street', mood: 'filmic', filter: 'clear' }))
+  assert.notEqual(filmic.id, 'clear', '胶片情绪的街拍不该只剩清晰')
+  const vivid = pickFilter(normalizeIntent({ scene: 'landscape', mood: 'vivid', filter: 'clear' }))
+  assert.notEqual(vivid.id, 'clear')
   // 中性画面仍然可以用通透
-  const neutral = pickFilter(normalizeIntent({ scene: 'other', mood: 'natural', filter: 'clean' }))
-  assert.equal(neutral.id, 'clean')
+  const neutral = pickFilter(normalizeIntent({ scene: 'other', mood: 'natural', filter: 'clear' }))
+  assert.equal(neutral.id, 'clear')
 })

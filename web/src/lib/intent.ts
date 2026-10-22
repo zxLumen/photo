@@ -76,9 +76,11 @@ export function describeIntent(i: AiIntent): string {
 /* ------------------------------------------------------------------ */
 
 /** 高调滤镜:套在低调(欠曝/夜景)照片上会把氛围洗掉 */
-const HIGH_KEY_ONLY = new Set(['airy', 'whitewall', 'japanese', 'brightskin', 'snow', 'mint'])
+const HIGH_KEY_ONLY = new Set(['oxygen', 'fresh', 'peach', 'coldwhite', 'snow', 'cream'])
 /** 强偏色滤镜:画面里有肤色时容易把脸染花 */
-const SKIN_UNSAFE = new Set(['cyber', 'tealorange', 'blackgold', 'cassette', 'oldfilm', 'twilight'])
+const SKIN_UNSAFE = new Set(['cyber', 'neon', 'tealorange', 'blackgold', 'y2k', 'dopamine'])
+/** 太中性的选择:如果模型自己都说这是胶片/浓郁/戏剧,就别用它们 */
+const NEUTRAL = new Set(['clear', 'clean', 'nature'])
 
 export interface FilterChoice {
   id: string
@@ -95,41 +97,51 @@ export function fallbackFilter(i: AiIntent): string {
   if (i.protect.includes('vintage')) return 'faded'
   switch (i.scene) {
     case 'portrait':
-      return i.mood === 'dramatic' ? 'bwcontrast' : i.mood === 'filmic' ? 'portra400' : i.mood === 'vivid' ? 'brightskin' : 'creamskin'
-    case 'food':
-      return i.key === 'low' || i.mood === 'dramatic' ? 'warmfood' : 'freshfood'
-    case 'night':
-      return i.mood === 'dramatic' ? 'cyber' : i.mood === 'filmic' ? 'cinestill800t' : 'citynight'
-    case 'street':
-      return i.mood === 'filmic' ? 'hongkong' : i.mood === 'dramatic' ? 'bwcontrast' : 'cinestill800t'
-    case 'architecture':
-      return i.mood === 'clean' ? 'crisp' : i.mood === 'filmic' ? 'classicchrome' : 'cold'
-    case 'macro':
-      return i.mood === 'muted' ? 'soft' : 'clean'
-    case 'landscape':
-      if (i.key === 'high') return 'airy'
-      if (i.protect.includes('warm-sunset')) return 'twilight'
-      if (i.mood === 'vivid') return 'velvia'
-      if (i.mood === 'filmic') return 'ektar100'
-      if (i.mood === 'muted') return 'pro400h'
       if (i.mood === 'dramatic') return 'bwcontrast'
+      if (i.mood === 'filmic') return 'film'
+      if (i.mood === 'vivid') return 'peach'
+      if (i.mood === 'muted') return 'creamskin'
+      return i.key === 'high' ? 'oxygen' : 'coldwhite'
+    case 'food':
+      return i.key === 'low' || i.mood === 'dramatic' ? 'smoke' : i.mood === 'muted' ? 'souffle' : 'savory'
+    case 'night':
+      if (i.mood === 'dramatic') return 'cyber'
+      if (i.mood === 'muted') return 'moody'
+      return i.mood === 'filmic' ? 'ccd' : 'neon'
+    case 'street':
+      if (i.mood === 'filmic') return 'hongkong'
+      if (i.mood === 'dramatic' || i.mood === 'muted') return 'bwcontrast'
+      return 'ccd'
+    case 'architecture':
+      if (i.mood === 'clean') return 'clear'
+      if (i.mood === 'filmic') return 'film'
+      return 'blue'
+    case 'macro':
+      return i.mood === 'muted' ? 'soft' : 'clear'
+    case 'landscape':
+      if (i.key === 'high') return 'oxygen'
+      if (i.protect.includes('warm-sunset')) return 'sunset'
+      if (i.mood === 'vivid') return 'sky'
+      if (i.mood === 'filmic') return 'film'
+      if (i.mood === 'muted') return 'morandi'
+      if (i.mood === 'dramatic' || i.key === 'low') return 'moody'
       return 'mountain'
     default:
       break
   }
   switch (i.mood) {
     case 'filmic':
-      return 'portra400'
+      return 'film'
     case 'muted':
-      return 'faded'
+      return 'morandi'
     case 'vivid':
-      return 'punch'
+      return 'vivid'
     case 'dramatic':
       return 'bwcontrast'
     case 'clean':
-      return 'clean'
+      return 'clear'
     default:
-      return 'clean'
+      return 'clear'
   }
 }
 
@@ -162,7 +174,7 @@ export function pickFilter(intent: AiIntent | null | undefined, stats?: ImageSta
   }
   // 模型嘴上说「胶片/淡雅/浓郁/戏剧」,却选了最中性的「通透」——
   // 说明画面有明显气质,按它自己判的情绪挑个更有性格的,别浪费 52 个滤镜。
-  if (id === 'clean' && intent.mood !== 'natural' && intent.mood !== 'clean') {
+  if (NEUTRAL.has(id) && intent.mood !== 'natural' && intent.mood !== 'clean') {
     const alt = fallbackFilter(intent)
     if (alt !== 'none') {
       id = alt
@@ -174,7 +186,7 @@ export function pickFilter(intent: AiIntent | null | undefined, stats?: ImageSta
 
   const noise = stats ? stats.noise : intent.noise === 'heavy' ? 0.5 : intent.noise === 'light' ? 0.2 : 0
   let amount = source === 'ai' ? clamp(intent.filterAmount, 40, 100) : 100
-  if (getFilter(id).grain > 0.15 && noise > 0.3) amount = Math.min(amount, 60)
+  if (getFilter(id).fx.grain > 0.15 && noise > 0.3) amount = Math.min(amount, 60)
   if (!why) why = getFilter(id).hint
   return { id, amount: Math.round(amount), why, source }
 }

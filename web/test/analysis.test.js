@@ -87,7 +87,7 @@ test('normalizeAnalysis 接受合法值', () => {
       brightness: 1,
       punch: -1,
       warmth: 0,
-      filter: { id: 'portra400', amount: 85, why: '肤色柔和' },
+      filter: { id: 'coldwhite', amount: 85, why: '肤色干净' },
       styleHint: '人像',
     },
     reason: '理由',
@@ -107,9 +107,9 @@ test('normalizeAnalysis 接受合法值', () => {
     brightness: 1,
     punch: -1,
     warmth: 0,
-    filter: 'portra400',
+    filter: 'coldwhite',
     filterAmount: 85,
-    filterWhy: '肤色柔和',
+    filterWhy: '肤色干净',
     styleHint: '人像',
   })
   assert.equal(a.reason, '理由')
@@ -125,8 +125,8 @@ test('意图枚举与前端保持一致的形状(至少非空且唯一)', () => 
 })
 
 test('滤镜:只接受目录里的 id,自创的作废为 none', () => {
-  const ok = normalizeAnalysis({ intent: { filter: { id: 'tealorange', amount: 70, why: '夜景' } } })
-  assert.equal(ok.intent.filter, 'tealorange')
+  const ok = normalizeAnalysis({ intent: { filter: { id: 'neon', amount: 70, why: '夜景' } } })
+  assert.equal(ok.intent.filter, 'neon')
   assert.equal(ok.intent.filterAmount, 70)
   assert.equal(ok.intent.filterWhy, '夜景')
 
@@ -149,7 +149,7 @@ test('提示词里带上了完整滤镜清单(模型才知道有哪些可选)', 
   const msgs = buildMessages({ width: 800, height: 600 })
   const text = msgs[1].content[0].text
   assert.ok(text.includes('滤镜清单'), '提示词应有滤镜清单')
-  for (const id of ['portra400', 'tealorange', 'bwselenium', 'creamskin', 'none']) {
+  for (const id of ['coldwhite', 'tealorange', 'ccd', 'creamskin', 'none']) {
     assert.ok(text.includes(`${id}(`), `清单里缺少 ${id}`)
   }
   assert.ok(text.includes('"filter"'), 'JSON 结构里应有 filter 字段')

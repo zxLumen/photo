@@ -1,14 +1,13 @@
 /**
  * 滤镜引擎(纯前端,零图片素材)。
  *
- * 每个滤镜 = 一段**声明式配方**(曲线 / 通道混合 / 分色 / 分色相 HSL / 褪色),
- * 启动时按需**烘焙成 3D LUT**(默认 33³),渲染时只是一次纹理采样。
- * 好处:
- *  - 想加多少个滤镜都行,每个只多几行数据,渲染开销不变;
- *  - 能做真正的胶片褪色、青橙分色、硒调黑白,而不是「挪几个滑块」;
- *  - 不需要下载/内置任何 LUT 图片,离线可用,包体积几乎不涨。
+ * 每个滤镜 = 一段**声明式配方**(曲线 / 通道混合 / 分色 / 分色相 HSL / 褪色)
+ * + 一组**空间效果**(柔光 / 光晕 / 漏光 / 色散 / HDR 局部对比 / 颗粒 / 暗角)。
+ * 颜色部分按需烘焙成 3D LUT(默认 33³),渲染时只多一次纹理采样;
+ * 空间效果由 shader 直接做,关闭时零开销。
  *
- * 配方跑在 sRGB 0..1 空间(与调色管线的显示空间一致),因此预览、对比、导出完全一致。
+ * 配色方向:参考剪映 / 抖音那套「网感」——干净透亮、肤色不脏、氛围靠光而不是靠灰,
+ * 而不是柯达/富士的胶片型号模拟(那类只保留在「复古」组里)。
  */
 import catalog from './filters.json' with { type: 'json' }
 
@@ -22,17 +21,34 @@ export interface FilterGroup {
 
 export const FILTER_GROUPS: FilterGroup[] = catalog.groups
 
+/** 空间效果(不在 LUT 里,由 shader 逐像素计算) */
+export interface FilterFx {
+  /** 胶片颗粒 0..1 */
+  grain: number
+  /** 额外暗角 0..1 */
+  vignette: number
+  /** 高光光晕 0..1 */
+  bloom: number
+  /** 光晕偏暖(0 = 白光,1 = 暖橙,接近 halation) */
+  warmBloom: number
+  /** 柔焦 0..1 */
+  soft: number
+  /** HDR 局部对比 0..1 */
+  local: number
+  /** 漏光 0..1 */
+  leak: number
+  /** 边缘色散 0..1 */
+  ca: number
+}
+
 export interface FilterDef {
   id: string
   name: string
   group: string
   /** 一句话:什么时候用(也给视觉模型看) */
   hint: string
-  /** 空间效果:颗粒 0..1 */
-  grain: number
-  /** 空间效果:额外暗角 0..1 */
-  vignette: number
   ops: Xform[]
+  fx: FilterFx
 }
 
 /* ------------------------------------------------------------------ */
@@ -135,7 +151,7 @@ const temp = (t: number): Xform => (c) => [
   clamp01(c[2] * (1 - t * 0.22)),
 ]
 
-/** 褪色:把黑场抬起来(level),整体压向灰,kh 越大越褪 */
+/** 褪色:把黑场抬起来(level),k 越大越褪 */
 const fade = (k: number, level = 0.06): Xform => (c) => [
   clamp01(c[0] * (1 - k) + level * k),
   clamp01(c[1] * (1 - k) + level * k),
@@ -159,7 +175,7 @@ const mono = (weights: RGB): Xform => {
   }
 }
 
-/** 双色调:按亮度在阴影色与高光色之间取色(用于硒调/蓝调黑白) */
+/** 双色调:按亮度在阴影色与高光色之间取色 */
 const duotone = (shadow: RGB, highlight: RGB, k = 1): Xform => (c) => {
   const t = clamp01(luma(c))
   const col = mixc(shadow, highlight, t)
@@ -177,19 +193,6 @@ const split = (s: RGB, h: RGB, k: number): Xform => (c) => {
     clamp01(c[1] + (s[1] - l) * sw + (h[1] - l) * hw),
     clamp01(c[2] + (s[2] - l) * sw + (h[2] - l) * hw),
   ]
-}
-
-/** 整体色相旋转(YIQ 旋转矩阵) */
-const hueRotate = (deg: number): Xform => {
-  const a = (deg * Math.PI) / 180
-  const c0 = Math.cos(a)
-  const s0 = Math.sin(a)
-  const m = [
-    [0.213 + c0 * 0.787 - s0 * 0.213, 0.715 - c0 * 0.715 - s0 * 0.715, 0.072 - c0 * 0.072 + s0 * 0.928],
-    [0.213 - c0 * 0.213 + s0 * 0.143, 0.715 + c0 * 0.285 + s0 * 0.14, 0.072 - c0 * 0.072 - s0 * 0.283],
-    [0.213 - c0 * 0.213 - s0 * 0.787, 0.715 - c0 * 0.715 + s0 * 0.715, 0.072 + c0 * 0.928 + s0 * 0.072],
-  ]
-  return channelMix(m)
 }
 
 /* ---- HSL 分色相 ---- */
@@ -263,109 +266,36 @@ interface Recipe {
   ops: Xform[]
   grain?: number
   vignette?: number
+  bloom?: number
+  warmBloom?: number
+  soft?: number
+  local?: number
+  leak?: number
+  ca?: number
 }
 
 const RECIPES: Record<string, Recipe> = {
   none: { ops: [] },
 
-  /* ---------------- 基础 ---------------- */
-  clean: {
-    ops: [curve([[0, 0], [0.22, 0.235], [0.78, 0.79], [1, 1]]), contrast(0.12), vib(0.22), hsl({ b: { sat: 0.06 } })],
+  /* ---------------- 精选 ---------------- */
+  clear: {
+    ops: [curve([[0, 0], [0.22, 0.235], [0.78, 0.8], [1, 1]]), contrast(0.14), vib(0.2), hsl({ b: { sat: 0.06 } })],
+    local: 0.25,
   },
-  soft: { ops: [curve([[0, 0.02], [0.5, 0.515], [1, 0.99]]), contrast(-0.2), sat(0.95)] },
-  punch: { ops: [contrast(0.3), sat(1.12), vib(0.18)] },
-  crisp: { ops: [curve([[0, 0], [0.18, 0.13], [0.82, 0.88], [1, 1]]), contrast(0.45), sat(1.05)] },
-
-  /* ---------------- 胶片 ---------------- */
-  portra400: {
+  nature: { ops: [contrast(0.04), sat(1.03), vib(0.08)] },
+  fresh: {
     ops: [
-      curve([[0, 0.03], [0.25, 0.255], [0.5, 0.52], [0.78, 0.79], [1, 0.97]]),
+      curve([[0, 0.04], [0.5, 0.55], [1, 0.99]]),
       contrast(-0.06),
-      temp(0.1),
-      hsl({ r: { sat: 0.06 }, y: { sat: -0.16 }, g: { sat: -0.1, hue: 5 }, b: { sat: 0.06 } }),
-      split([0.44, 0.41, 0.4], [0.54, 0.5, 0.44], 0.35),
-      fade(0.16, 0.04),
-    ],
-    grain: 0.16,
-  },
-  gold200: {
-    ops: [
-      curve([[0, 0.025], [0.3, 0.3], [0.7, 0.73], [1, 0.98]]),
-      contrast(0.1),
-      temp(0.18),
-      hsl({ y: { sat: 0.12 }, g: { sat: -0.08 }, b: { sat: -0.12 } }),
-      split([0.45, 0.41, 0.31], [0.55, 0.5, 0.38], 0.3),
-      fade(0.1, 0.035),
-    ],
-    grain: 0.18,
-  },
-  ektar100: {
-    ops: [contrast(0.22), sat(1.18), hsl({ r: { sat: 0.12 }, b: { sat: 0.08 }, g: { sat: 0.05 } }), split([0.4, 0.44, 0.48], [0.53, 0.51, 0.48], 0.18)],
-    grain: 0.04,
-  },
-  pro400h: {
-    ops: [
-      curve([[0, 0.05], [0.3, 0.31], [0.7, 0.72], [1, 0.98]]),
-      contrast(-0.14),
-      sat(0.9),
-      temp(-0.03),
-      hsl({ g: { sat: -0.06, hue: -4 }, c: { sat: 0.05 } }),
-      split([0.41, 0.47, 0.47], [0.53, 0.52, 0.5], 0.22),
-    ],
-    grain: 0.1,
-  },
-  c200: {
-    ops: [
-      contrast(0.08),
-      temp(0.05),
-      hsl({ y: { sat: 0.08 }, g: { sat: 0.06, hue: 3 }, b: { sat: -0.06 } }),
-      split([0.42, 0.45, 0.4], [0.54, 0.5, 0.43], 0.22),
-      fade(0.08, 0.03),
-    ],
-    grain: 0.2,
-  },
-  classicchrome: {
-    ops: [contrast(0.18), sat(0.72), hsl({ b: { sat: 0.05 }, y: { sat: -0.1 } }), split([0.4, 0.43, 0.46], [0.51, 0.51, 0.5], 0.25), fade(0.1, 0.04)],
-    grain: 0.05,
-  },
-  velvia: {
-    ops: [curve([[0, 0], [0.25, 0.2], [0.75, 0.82], [1, 1]]), contrast(0.3), sat(1.4), hsl({ r: { sat: 0.12 }, g: { sat: 0.1 }, b: { sat: 0.14 } })],
-    grain: 0.03,
-  },
-  cinestill800t: {
-    ops: [
-      temp(-0.16),
-      contrast(0.12),
       sat(1.02),
-      hsl({ b: { sat: 0.1 }, c: { sat: 0.05 } }),
-      split([0.37, 0.44, 0.5], [0.54, 0.47, 0.44], 0.4),
-      fade(0.14, 0.05),
+      hsl({ g: { hue: 5, sat: 0.05 }, c: { sat: 0.06 } }),
+      split([0.44, 0.49, 0.48], [0.54, 0.54, 0.51], 0.16),
     ],
-    grain: 0.3,
+    bloom: 0.08,
   },
-  polaroid: {
-    ops: [
-      curve([[0, 0.06], [0.3, 0.34], [0.7, 0.74], [1, 0.97]]),
-      contrast(-0.18),
-      sat(0.9),
-      temp(0.12),
-      split([0.45, 0.48, 0.45], [0.56, 0.53, 0.44], 0.3),
-      fade(0.3, 0.1),
-    ],
-    grain: 0.12,
-  },
-  oldfilm: {
-    ops: [sat(0.7), temp(0.16), contrast(-0.02), split([0.43, 0.38, 0.31], [0.53, 0.48, 0.37], 0.35), fade(0.26, 0.09)],
-    grain: 0.35,
-    vignette: 0.2,
-  },
-  trix: {
-    ops: [mono([0.28, 0.62, 0.1]), curve([[0, 0.01], [0.2, 0.15], [0.8, 0.88], [1, 1]]), contrast(0.28)],
-    grain: 0.45,
-  },
-  hp5: { ops: [mono([0.3, 0.58, 0.12]), contrast(0.12), fade(0.08, 0.04)], grain: 0.4 },
-
-  /* ---------------- 日系 ---------------- */
+  clean: { ops: [curve([[0, 0], [0.22, 0.235], [0.78, 0.79], [1, 1]]), contrast(0.12), vib(0.22), hsl({ b: { sat: 0.06 } })] },
+  vivid: { ops: [contrast(0.3), sat(1.12), vib(0.18)], local: 0.15 },
+  soft: { ops: [curve([[0, 0.02], [0.5, 0.515], [1, 0.99]]), contrast(-0.2), sat(0.95)], soft: 0.15 },
   japanese: {
     ops: [
       curve([[0, 0.05], [0.5, 0.56], [1, 0.99]]),
@@ -375,9 +305,29 @@ const RECIPES: Record<string, Recipe> = {
       split([0.43, 0.48, 0.47], [0.54, 0.53, 0.51], 0.2),
       fade(0.1, 0.05),
     ],
+    bloom: 0.06,
   },
-  airy: {
-    ops: [curve([[0, 0.1], [0.5, 0.62], [1, 1]]), contrast(-0.2), sat(0.9), temp(-0.04), fade(0.16, 0.07)],
+
+  /* ---------------- 人像 ---------------- */
+  coldwhite: {
+    ops: [
+      curve([[0, 0.05], [0.45, 0.52], [1, 1]]),
+      contrast(-0.02),
+      temp(-0.09),
+      hsl({ y: { sat: -0.12 }, r: { sat: -0.05 }, b: { sat: 0.05 } }),
+      split([0.47, 0.49, 0.51], [0.53, 0.53, 0.54], 0.2),
+    ],
+    bloom: 0.1,
+  },
+  warmwhite: {
+    ops: [
+      curve([[0, 0.05], [0.45, 0.52], [1, 1]]),
+      contrast(-0.03),
+      temp(0.08),
+      hsl({ y: { sat: -0.06 } }),
+      split([0.48, 0.46, 0.44], [0.55, 0.52, 0.48], 0.22),
+    ],
+    bloom: 0.1,
   },
   cream: {
     ops: [
@@ -387,6 +337,28 @@ const RECIPES: Record<string, Recipe> = {
       split([0.46, 0.43, 0.42], [0.56, 0.52, 0.45], 0.3),
       fade(0.14, 0.06),
     ],
+    bloom: 0.12,
+  },
+  creamskin: {
+    ops: [
+      curve([[0, 0.04], [0.5, 0.55], [1, 0.99]]),
+      contrast(-0.1),
+      temp(0.08),
+      hsl({ r: { sat: -0.06 }, o: { sat: -0.04 } }),
+      split([0.47, 0.44, 0.43], [0.56, 0.52, 0.46], 0.3),
+      fade(0.08, 0.04),
+    ],
+    bloom: 0.12,
+  },
+  peach: {
+    ops: [
+      curve([[0, 0.05], [0.5, 0.55], [1, 1]]),
+      contrast(-0.04),
+      temp(0.06),
+      hsl({ o: { sat: 0.1, hue: -4 }, r: { sat: 0.02 }, y: { sat: -0.04 } }),
+      split([0.47, 0.44, 0.45], [0.58, 0.5, 0.47], 0.3),
+    ],
+    bloom: 0.18,
   },
   sakura: {
     ops: [
@@ -396,24 +368,153 @@ const RECIPES: Record<string, Recipe> = {
       split([0.46, 0.43, 0.46], [0.57, 0.49, 0.51], 0.35),
       fade(0.1, 0.05),
     ],
+    bloom: 0.12,
   },
-  mint: {
-    ops: [contrast(-0.06), hsl({ g: { hue: 10, sat: 0.1 }, c: { sat: 0.1 } }), temp(-0.06), split([0.41, 0.48, 0.46], [0.51, 0.54, 0.52], 0.25)],
+  oxygen: {
+    ops: [curve([[0, 0.09], [0.5, 0.6], [1, 1]]), contrast(-0.16), sat(0.95), temp(-0.03), fade(0.1, 0.05)],
+    bloom: 0.12,
   },
-  whitewall: {
-    ops: [curve([[0, 0.08], [0.5, 0.6], [1, 1]]), contrast(-0.12), sat(0.86), temp(-0.03), split([0.48, 0.48, 0.49], [0.53, 0.53, 0.54], 0.15)],
+  water: {
+    ops: [
+      curve([[0, 0.04], [0.5, 0.53], [1, 1]]),
+      contrast(0.05),
+      sat(1.02),
+      split([0.45, 0.48, 0.51], [0.56, 0.55, 0.53], 0.2),
+    ],
+    bloom: 0.3,
+    warmBloom: 0.35,
+    local: 0.15,
   },
 
-  /* ---------------- 电影 ---------------- */
-  tealorange: {
-    ops: [contrast(0.2), sat(1.05), hsl({ o: { sat: 0.14 }, b: { sat: 0.12, hue: -6 } }), split([0.35, 0.47, 0.52], [0.57, 0.47, 0.35], 0.55)],
+  /* ---------------- 风景 ---------------- */
+  sky: {
+    ops: [contrast(0.22), sat(1.18), hsl({ b: { sat: 0.2, hue: -4 }, c: { sat: 0.1 } }), split([0.4, 0.46, 0.5], [0.53, 0.53, 0.5], 0.2)],
+    local: 0.3,
   },
-  darkcinema: {
+  coast: {
+    ops: [contrast(0.08), sat(1.1), hsl({ c: { sat: 0.12 }, b: { sat: 0.1 } }), split([0.39, 0.47, 0.5], [0.54, 0.54, 0.51], 0.28)],
+    local: 0.15,
+  },
+  mountain: {
+    ops: [contrast(0.18), sat(1.08), hsl({ g: { sat: 0.08, hue: 4 }, b: { sat: 0.12 }, c: { sat: 0.08 } }), split([0.38, 0.44, 0.47], [0.53, 0.53, 0.5], 0.3)],
+    local: 0.2,
+  },
+  forest: {
+    ops: [contrast(0.12), sat(1.05), hsl({ g: { sat: 0.12, hue: -4 }, c: { sat: 0.06 } }), split([0.36, 0.43, 0.4], [0.52, 0.52, 0.48], 0.3)],
+    local: 0.15,
+    vignette: 0.12,
+  },
+  snow: {
+    ops: [curve([[0, 0.04], [0.5, 0.55], [1, 1]]), contrast(-0.04), sat(0.85), temp(-0.1), split([0.45, 0.49, 0.53], [0.53, 0.54, 0.56], 0.25)],
+    local: 0.1,
+  },
+  sunset: {
+    ops: [
+      contrast(0.15),
+      sat(1.14),
+      temp(0.12),
+      hsl({ o: { sat: 0.18 }, y: { sat: 0.12 }, b: { sat: -0.06 } }),
+      split([0.42, 0.38, 0.42], [0.6, 0.48, 0.36], 0.35),
+    ],
+    bloom: 0.2,
+    warmBloom: 0.7,
+  },
+  autumn: {
+    ops: [
+      contrast(0.12),
+      sat(1.12),
+      hsl({ o: { sat: 0.16 }, y: { sat: 0.14, hue: -4 }, r: { sat: 0.06 }, g: { sat: -0.08 } }),
+      split([0.44, 0.42, 0.34], [0.56, 0.5, 0.39], 0.25),
+    ],
+    local: 0.1,
+  },
+
+  /* ---------------- 美食 ---------------- */
+  savory: {
+    ops: [
+      contrast(0.16),
+      sat(1.14),
+      temp(0.12),
+      hsl({ o: { sat: 0.18, hue: -3 }, r: { sat: 0.12 }, y: { sat: 0.08 }, g: { sat: -0.1 } }),
+      split([0.43, 0.4, 0.34], [0.56, 0.5, 0.39], 0.2),
+    ],
+    local: 0.2,
+  },
+  warmfood: {
+    ops: [
+      contrast(0.14),
+      sat(1.1),
+      temp(0.12),
+      hsl({ o: { sat: 0.16, hue: -3 }, r: { sat: 0.1 }, y: { sat: 0.08 }, g: { sat: -0.1 } }),
+      split([0.43, 0.4, 0.34], [0.56, 0.5, 0.39], 0.22),
+    ],
+    local: 0.15,
+  },
+  souffle: {
+    ops: [
+      curve([[0, 0.05], [0.5, 0.56], [1, 1]]),
+      contrast(-0.1),
+      temp(0.1),
+      sat(1.04),
+      split([0.48, 0.45, 0.43], [0.57, 0.53, 0.47], 0.28),
+    ],
+    bloom: 0.16,
+  },
+  smoke: {
+    ops: [
+      curve([[0, 0], [0.3, 0.22], [1, 0.98]]),
+      contrast(0.2),
+      temp(0.1),
+      sat(1.08),
+      split([0.4, 0.38, 0.33], [0.55, 0.49, 0.39], 0.3),
+    ],
+    vignette: 0.18,
+    grain: 0.12,
+  },
+  crispfood: {
+    ops: [
+      contrast(0.1),
+      sat(1.18),
+      vib(0.2),
+      hsl({ g: { sat: 0.14 }, r: { sat: 0.08 }, c: { sat: 0.08 } }),
+      split([0.44, 0.48, 0.47], [0.53, 0.53, 0.51], 0.18),
+    ],
+    local: 0.1,
+  },
+
+  /* ---------------- 氛围 ---------------- */
+  moody: {
     ops: [curve([[0, 0], [0.3, 0.2], [1, 0.96]]), contrast(0.18), sat(0.85), split([0.35, 0.43, 0.48], [0.53, 0.5, 0.46], 0.4)],
+    bloom: 0.08,
     vignette: 0.25,
   },
-  silver: { ops: [sat(0.35), contrast(0.3), hsl({ b: { sat: 0.05 } }), split([0.42, 0.44, 0.47], [0.53, 0.54, 0.55], 0.3)] },
-  twilight: { ops: [contrast(0.1), sat(1.05), temp(0.05), split([0.44, 0.4, 0.53], [0.56, 0.49, 0.42], 0.4)] },
+  neon: {
+    ops: [
+      curve([[0, 0], [0.28, 0.2], [1, 1]]),
+      contrast(0.24),
+      sat(1.22),
+      hsl({ m: { sat: 0.2, hue: 4 }, c: { sat: 0.24 }, b: { sat: 0.14 } }),
+      split([0.34, 0.4, 0.56], [0.56, 0.42, 0.54], 0.55),
+    ],
+    bloom: 0.35,
+    warmBloom: 0.15,
+    vignette: 0.15,
+  },
+  dusk: {
+    ops: [contrast(0.1), sat(1.05), temp(0.05), split([0.44, 0.4, 0.53], [0.56, 0.49, 0.42], 0.4)],
+    bloom: 0.1,
+  },
+  blue: { ops: [temp(-0.2), sat(0.85), contrast(0.22), split([0.38, 0.43, 0.5], [0.51, 0.53, 0.56], 0.35)] },
+  haze: {
+    ops: [
+      curve([[0, 0.08], [0.5, 0.55], [1, 0.98]]),
+      contrast(-0.1),
+      sat(0.72),
+      temp(-0.1),
+      split([0.45, 0.48, 0.52], [0.53, 0.53, 0.55], 0.25),
+    ],
+    soft: 0.1,
+  },
   cyber: {
     ops: [
       curve([[0, 0], [0.28, 0.18], [1, 1]]),
@@ -422,12 +523,60 @@ const RECIPES: Record<string, Recipe> = {
       hsl({ m: { sat: 0.18, hue: 4 }, c: { sat: 0.22 }, b: { sat: 0.12 } }),
       split([0.36, 0.4, 0.55], [0.56, 0.42, 0.53], 0.5),
     ],
+    bloom: 0.3,
+    ca: 0.2,
+  },
+  tealorange: {
+    ops: [contrast(0.2), sat(1.05), hsl({ o: { sat: 0.14 }, b: { sat: 0.12, hue: -6 } }), split([0.35, 0.47, 0.52], [0.57, 0.47, 0.35], 0.55)],
+    local: 0.15,
   },
   blackgold: {
     ops: [sat(0.5), curve([[0, 0], [0.35, 0.24], [1, 1]]), contrast(0.28), split([0.4, 0.4, 0.39], [0.6, 0.51, 0.3], 0.42)],
     grain: 0.1,
   },
-  cold: { ops: [temp(-0.2), sat(0.85), contrast(0.22), split([0.38, 0.43, 0.5], [0.51, 0.53, 0.56], 0.35)] },
+
+  /* ---------------- 潮流 ---------------- */
+  dopamine: {
+    ops: [contrast(0.2), sat(1.45), hsl({ r: { sat: 0.15 }, c: { sat: 0.2 }, m: { sat: 0.15 }, y: { sat: 0.15 } })],
+    bloom: 0.18,
+  },
+  maillard: {
+    ops: [
+      contrast(0.18),
+      sat(1.08),
+      temp(0.16),
+      hsl({ o: { sat: 0.16, hue: -6 }, y: { sat: 0.1 }, b: { sat: -0.1 } }),
+      split([0.42, 0.36, 0.28], [0.58, 0.49, 0.34], 0.35),
+    ],
+    grain: 0.12,
+  },
+  morandi: { ops: [contrast(-0.08), sat(0.62), split([0.46, 0.45, 0.45], [0.54, 0.52, 0.49], 0.2)], soft: 0.12 },
+  y2k: {
+    ops: [
+      curve([[0, 0.03], [0.5, 0.54], [1, 1]]),
+      contrast(0.2),
+      sat(1.25),
+      temp(-0.05),
+      hsl({ m: { sat: 0.2 }, c: { sat: 0.2 }, b: { sat: 0.1 } }),
+      split([0.38, 0.42, 0.55], [0.58, 0.46, 0.55], 0.45),
+    ],
+    bloom: 0.3,
+    leak: 0.35,
+    ca: 0.45,
+  },
+
+  /* ---------------- 复古 ---------------- */
+  film: {
+    ops: [
+      curve([[0, 0.03], [0.25, 0.255], [0.5, 0.52], [0.78, 0.79], [1, 0.97]]),
+      contrast(-0.06),
+      temp(0.1),
+      hsl({ r: { sat: 0.05 }, y: { sat: -0.14 }, g: { sat: -0.1, hue: 5 }, b: { sat: 0.05 } }),
+      split([0.44, 0.41, 0.4], [0.54, 0.5, 0.44], 0.3),
+      fade(0.14, 0.04),
+    ],
+    grain: 0.15,
+  },
   hongkong: {
     ops: [
       temp(0.04),
@@ -437,10 +586,23 @@ const RECIPES: Record<string, Recipe> = {
       split([0.38, 0.45, 0.43], [0.56, 0.5, 0.41], 0.4),
       fade(0.1, 0.04),
     ],
-    grain: 0.2,
+    grain: 0.15,
   },
-
-  /* ---------------- 复古 ---------------- */
+  ccd: {
+    ops: [
+      curve([[0, 0], [0.3, 0.27], [1, 0.98]]),
+      contrast(0.24),
+      temp(-0.1),
+      sat(1.06),
+      hsl({ b: { sat: 0.08 } }),
+      split([0.4, 0.45, 0.5], [0.54, 0.5, 0.46], 0.3),
+    ],
+    bloom: 0.22,
+    warmBloom: 0.5,
+    ca: 0.25,
+    grain: 0.22,
+  },
+  faded: { ops: [fade(0.38, 0.12), contrast(-0.2), sat(0.9), split([0.47, 0.44, 0.46], [0.52, 0.51, 0.5], 0.2)], grain: 0.08 },
   oldphoto: {
     ops: [
       channelMix([
@@ -455,34 +617,17 @@ const RECIPES: Record<string, Recipe> = {
     grain: 0.25,
     vignette: 0.28,
   },
-  faded: { ops: [fade(0.38, 0.12), contrast(-0.2), sat(0.9), split([0.47, 0.44, 0.46], [0.52, 0.51, 0.5], 0.2)], grain: 0.08 },
-  sepia: {
+  polaroid: {
     ops: [
-      channelMix([
-        [0.393, 0.769, 0.189],
-        [0.349, 0.686, 0.168],
-        [0.272, 0.534, 0.131],
-      ]),
-      contrast(0.1),
-      temp(0.04),
-    ],
-  },
-  nineties: {
-    ops: [
+      curve([[0, 0.06], [0.3, 0.34], [0.7, 0.74], [1, 0.97]]),
+      contrast(-0.18),
+      sat(0.9),
       temp(0.12),
-      contrast(-0.04),
-      sat(0.98),
-      hsl({ g: { sat: 0.05, hue: 3 } }),
-      split([0.44, 0.43, 0.36], [0.56, 0.51, 0.4], 0.28),
-      fade(0.16, 0.06),
+      split([0.45, 0.48, 0.45], [0.56, 0.53, 0.44], 0.3),
+      fade(0.3, 0.1),
     ],
-    grain: 0.25,
+    grain: 0.12,
   },
-  cassette: {
-    ops: [hueRotate(6), sat(0.95), contrast(-0.08), split([0.45, 0.4, 0.49], [0.54, 0.5, 0.5], 0.35), fade(0.28, 0.1)],
-    grain: 0.18,
-  },
-  newsprint: { ops: [sat(0.18), contrast(0.26), split([0.4, 0.4, 0.38], [0.57, 0.56, 0.49], 0.3)], grain: 0.12 },
 
   /* ---------------- 黑白 ---------------- */
   bw: { ops: [mono([0.299, 0.587, 0.114]), contrast(0.08)] },
@@ -491,88 +636,31 @@ const RECIPES: Record<string, Recipe> = {
     grain: 0.18,
   },
   bwsoft: { ops: [mono([0.32, 0.55, 0.13]), contrast(-0.16), fade(0.12, 0.06)] },
-  bwselenium: { ops: [mono([0.3, 0.59, 0.11]), contrast(0.14), duotone([0.16, 0.14, 0.2], [0.92, 0.9, 0.88], 0.55)] },
-  bwblue: { ops: [mono([0.3, 0.59, 0.11]), contrast(0.12), duotone([0.06, 0.1, 0.2], [0.88, 0.92, 1], 0.7)] },
-
-  /* ---------------- 题材 ---------------- */
-  mountain: {
-    ops: [contrast(0.18), sat(1.08), hsl({ g: { sat: 0.08, hue: 4 }, b: { sat: 0.12 }, c: { sat: 0.08 } }), split([0.38, 0.44, 0.47], [0.53, 0.53, 0.5], 0.3)],
-  },
-  coast: {
-    ops: [contrast(0.08), sat(1.1), hsl({ c: { sat: 0.12 }, b: { sat: 0.1 } }), split([0.39, 0.47, 0.5], [0.54, 0.54, 0.51], 0.28)],
-  },
-  autumn: {
-    ops: [
-      contrast(0.12),
-      sat(1.12),
-      hsl({ o: { sat: 0.16 }, y: { sat: 0.14, hue: -4 }, r: { sat: 0.06 }, g: { sat: -0.08 } }),
-      split([0.44, 0.42, 0.34], [0.56, 0.5, 0.39], 0.25),
-    ],
-  },
-  snow: {
-    ops: [curve([[0, 0.04], [0.5, 0.55], [1, 1]]), contrast(-0.04), sat(0.85), temp(-0.1), split([0.45, 0.49, 0.53], [0.53, 0.54, 0.56], 0.25)],
-  },
-  forest: {
-    ops: [contrast(0.12), sat(1.05), hsl({ g: { sat: 0.12, hue: -4 }, c: { sat: 0.06 } }), split([0.36, 0.43, 0.4], [0.52, 0.52, 0.48], 0.3)],
-    vignette: 0.12,
-  },
-  citynight: {
-    ops: [
-      contrast(0.16),
-      sat(1.05),
-      temp(-0.05),
-      hsl({ b: { sat: 0.1 }, o: { sat: 0.1 } }),
-      split([0.37, 0.43, 0.55], [0.56, 0.49, 0.38], 0.4),
-    ],
-    grain: 0.12,
-  },
-  creamskin: {
-    ops: [
-      curve([[0, 0.04], [0.5, 0.55], [1, 0.99]]),
-      contrast(-0.1),
-      temp(0.08),
-      hsl({ r: { sat: -0.06 }, o: { sat: -0.04 } }),
-      split([0.47, 0.44, 0.43], [0.56, 0.52, 0.46], 0.3),
-      fade(0.08, 0.04),
-    ],
-  },
-  brightskin: {
-    ops: [
-      curve([[0, 0.05], [0.4, 0.46], [1, 1]]),
-      contrast(-0.04),
-      sat(0.98),
-      temp(0.04),
-      hsl({ y: { sat: -0.06 }, r: { sat: -0.04 } }),
-      split([0.47, 0.48, 0.48], [0.54, 0.53, 0.5], 0.2),
-    ],
-  },
-  warmfood: {
-    ops: [
-      contrast(0.14),
-      sat(1.1),
-      temp(0.12),
-      hsl({ o: { sat: 0.16, hue: -3 }, r: { sat: 0.1 }, y: { sat: 0.08 }, g: { sat: -0.1 } }),
-      split([0.43, 0.4, 0.34], [0.56, 0.5, 0.39], 0.22),
-    ],
-  },
-  freshfood: {
-    ops: [
-      contrast(0.1),
-      sat(1.18),
-      vib(0.2),
-      hsl({ g: { sat: 0.14 }, r: { sat: 0.08 }, c: { sat: 0.08 } }),
-      split([0.44, 0.48, 0.47], [0.53, 0.53, 0.51], 0.18),
-    ],
+  silver: {
+    ops: [mono([0.3, 0.59, 0.11]), contrast(0.16), duotone([0.1, 0.11, 0.13], [0.9, 0.91, 0.93], 0.6)],
+    grain: 0.18,
   },
 }
 
-/* ------------------------------------------------------------------ */
-/* 注册表                                                              */
-/* ------------------------------------------------------------------ */
+const ZERO_FX: FilterFx = { grain: 0, vignette: 0, bloom: 0, warmBloom: 0, soft: 0, local: 0, leak: 0, ca: 0 }
 
 export const FILTER_LIST: FilterDef[] = catalog.items.map((it) => {
   const r = RECIPES[it.id] ?? { ops: [] }
-  return { ...it, grain: r.grain ?? 0, vignette: r.vignette ?? 0, ops: r.ops }
+  return {
+    ...it,
+    ops: r.ops,
+    fx: {
+      ...ZERO_FX,
+      grain: r.grain ?? 0,
+      vignette: r.vignette ?? 0,
+      bloom: r.bloom ?? 0,
+      warmBloom: r.warmBloom ?? 0,
+      soft: r.soft ?? 0,
+      local: r.local ?? 0,
+      leak: r.leak ?? 0,
+      ca: r.ca ?? 0,
+    },
+  }
 })
 
 export const FILTERS: Record<string, FilterDef> = Object.fromEntries(FILTER_LIST.map((f) => [f.id, f]))

@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>光圈 · 新滤镜样张</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0e1116; color: #e8edf5;
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 18px 60px; }
+  header { margin-bottom: 26px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+  .brand i { color: #ffc85a; font-style: normal; }
+  .brand small { font-size: 12px; font-weight: 400; color: #8b95a7; letter-spacing: 0; }
+  h1 { font-size: 26px; margin: 18px 0 6px; }
+  .lead { color: #a6b0c3; margin: 0 0 6px; }
+  .lead b { color: #ffc85a; font-weight: 600; }
+  .cta { display: inline-flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .cta a { color: #0e1116; background: #ffc85a; border-radius: 999px; padding: 8px 16px; font-weight: 600; text-decoration: none; font-size: 13px; }
+  .cta a.ghost { background: transparent; color: #cbd5e6; border: 1px solid #2a3242; }
+  h2 { font-size: 16px; margin: 34px 0 10px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  h2 span { font-size: 12px; font-weight: 400; color: #7d8798; }
+  h3 { font-size: 13px; color: #ffc85a; margin: 22px 0 8px; letter-spacing: .5px; }
+  h3 span { color: #5f6a7d; font-weight: 400; margin-left: 4px; }
+  .photo { border-top: 1px solid #1d2431; padding-top: 6px; }
+  .strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+  .cell { margin: 0; }
+  .cell img { width: 100%; border-radius: 8px; display: block; background: #11151c; }
+  .cell figcaption { font-size: 11px; color: #93a0b4; text-align: center; margin-top: 5px; }
+  .cell:first-child figcaption { color: #6c7788; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 10px; }
+  .tile { margin: 0; background: #141922; border: 1px solid #1d2431; border-radius: 10px; overflow: hidden; }
+  .tile img { width: 100%; display: block; aspect-ratio: 4 / 3; object-fit: cover; }
+  .tile figcaption { padding: 7px 9px 9px; display: flex; flex-direction: column; gap: 1px; }
+  .tile b { font-size: 12.5px; font-weight: 600; color: #e8edf5; }
+  .tile span { font-size: 11px; color: #7d8798; }
+  footer { margin-top: 40px; padding-top: 18px; border-top: 1px solid #1d2431; color: #7d8798; font-size: 12px; }
+  footer b { color: #a6b0c3; font-weight: 500; }
+  @media (max-width: 860px) {
+    .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    h1 { font-size: 22px; }
+  }
+  @media (max-width: 520px) {
+    .strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><i>◉</i> 光圈 <small>构图裁剪 · 自动修图</small></div>
+    <h1>新滤镜样张</h1>
+    <p class="lead">按<b>剪映 / 抖音</b>的方向重做:8 组 50 个,从「胶片型号模拟」换成「干净透亮 + 有光感」。</p>
+    <p class="lead">这次不只改颜色 —— 高光光晕、柔焦、漏光、边缘色散、HDR 局部对比都进了渲染管线,所以人像会「透」、夜景灯会「洇」。</p>
+    <div class="cta">
+      <a href="/">去 App 里换自己的照片试</a>
+      <a class="ghost" href="#all">看全部 50 个</a>
+    </div>
+  </header>
+
+  <p class="lead">下面每组三连:原片 → 自动调色 → 自动调色 + 滤镜。<br>前两格用来确认「底子没被改坏」,后面四格是这次重点的四个方向。</p>
+  
+    <section class="photo">
+      <h2>中餐圆桌 <span>美食 / 暖光室内</span></h2>
+      <div class="strip">
+      <figure class="cell">
+        <img src="/preview/cmp-dinner-raw.jpg" alt="中餐圆桌 原片(未修)" loading="lazy">
+        <figcaption>原片(未修)</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-dinner-tone.jpg" alt="中餐圆桌 自动调色" loading="lazy">
+        <figcaption>自动调色</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-dinner-coldwhite.jpg" alt="中餐圆桌 + 冷白" loading="lazy">
+        <figcaption>+ 冷白</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-dinner-sky.jpg" alt="中餐圆桌 + 晴空" loading="lazy">
+        <figcaption>+ 晴空</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-dinner-neon.jpg" alt="中餐圆桌 + 霓虹" loading="lazy">
+        <figcaption>+ 霓虹</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-dinner-y2k.jpg" alt="中餐圆桌 + 千禧" loading="lazy">
+        <figcaption>+ 千禧</figcaption>
+      </figure></div>
+    </section>
+    <section class="photo">
+      <h2>冬日旷野 <span>风景 / 阴天发灰</span></h2>
+      <div class="strip">
+      <figure class="cell">
+        <img src="/preview/cmp-winter-raw.jpg" alt="冬日旷野 原片(未修)" loading="lazy">
+        <figcaption>原片(未修)</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-winter-tone.jpg" alt="冬日旷野 自动调色" loading="lazy">
+        <figcaption>自动调色</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-winter-coldwhite.jpg" alt="冬日旷野 + 冷白" loading="lazy">
+        <figcaption>+ 冷白</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-winter-sky.jpg" alt="冬日旷野 + 晴空" loading="lazy">
+        <figcaption>+ 晴空</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-winter-neon.jpg" alt="冬日旷野 + 霓虹" loading="lazy">
+        <figcaption>+ 霓虹</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-winter-y2k.jpg" alt="冬日旷野 + 千禧" loading="lazy">
+        <figcaption>+ 千禧</figcaption>
+      </figure></div>
+    </section>
+    <section class="photo">
+      <h2>地铁站台 <span>氛围 / 荧光灯</span></h2>
+      <div class="strip">
+      <figure class="cell">
+        <img src="/preview/cmp-subway-raw.jpg" alt="地铁站台 原片(未修)" loading="lazy">
+        <figcaption>原片(未修)</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-subway-tone.jpg" alt="地铁站台 自动调色" loading="lazy">
+        <figcaption>自动调色</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-subway-coldwhite.jpg" alt="地铁站台 + 冷白" loading="lazy">
+        <figcaption>+ 冷白</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-subway-sky.jpg" alt="地铁站台 + 晴空" loading="lazy">
+        <figcaption>+ 晴空</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-subway-neon.jpg" alt="地铁站台 + 霓虹" loading="lazy">
+        <figcaption>+ 霓虹</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-subway-y2k.jpg" alt="地铁站台 + 千禧" loading="lazy">
+        <figcaption>+ 千禧</figcaption>
+      </figure></div>
+    </section>
+    <section class="photo">
+      <h2>土操场 <span>日常 / 高光溢出</span></h2>
+      <div class="strip">
+      <figure class="cell">
+        <img src="/preview/cmp-playground-raw.jpg" alt="土操场 原片(未修)" loading="lazy">
+        <figcaption>原片(未修)</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-playground-tone.jpg" alt="土操场 自动调色" loading="lazy">
+        <figcaption>自动调色</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-playground-coldwhite.jpg" alt="土操场 + 冷白" loading="lazy">
+        <figcaption>+ 冷白</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-playground-sky.jpg" alt="土操场 + 晴空" loading="lazy">
+        <figcaption>+ 晴空</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-playground-neon.jpg" alt="土操场 + 霓虹" loading="lazy">
+        <figcaption>+ 霓虹</figcaption>
+      </figure>
+      <figure class="cell">
+        <img src="/preview/cmp-playground-y2k.jpg" alt="土操场 + 千禧" loading="lazy">
+        <figcaption>+ 千禧</figcaption>
+      </figure></div>
+    </section>
+
+  <h2 id="all">全部 50 个 <span>同一张照片,强度 100%</span></h2>
+  
+    <section class="grp">
+      <h3>精选 <span>8</span></h3>
+      <div class="grid">
+        
+          <figure class="tile">
+            <img src="/preview/tile-none.jpg" alt="原片" loading="lazy">
+            <figcaption><b>原片</b><span>不套滤镜,只保留按本图测算的调色</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-clear.jpg" alt="清晰" loading="lazy">
+            <figcaption><b>清晰</b><span>轻提对比与细节,通用不挑片</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-nature.jpg" alt="自然" loading="lazy">
+            <figcaption><b>自然</b><span>只做轻微修正,几乎看不出修过</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-fresh.jpg" alt="清新" loading="lazy">
+            <figcaption><b>清新</b><span>明亮通透,略偏青</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-clean.jpg" alt="通透" loading="lazy">
+            <figcaption><b>通透</b><span>去灰、提反差,适合阴天</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-vivid.jpg" alt="鲜明" loading="lazy">
+            <figcaption><b>鲜明</b><span>高饱和高反差,像手机「鲜明」风格</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-soft.jpg" alt="柔和" loading="lazy">
+            <figcaption><b>柔和</b><span>低反差柔焦,人像友好</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-japanese.jpg" alt="日系" loading="lazy">
+            <figcaption><b>日系</b><span>明亮低反差,青绿阴影</span></figcaption>
+          </figure>
+      </div>
+    </section>
+    <section class="grp">
+      <h3>人像 <span>8</span></h3>
+      <div class="grid">
+        
+          <figure class="tile">
+            <img src="/preview/tile-coldwhite.jpg" alt="冷白" loading="lazy">
+            <figcaption><b>冷白</b><span>提亮压黄,肤色干净冷白</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-warmwhite.jpg" alt="暖白" loading="lazy">
+            <figcaption><b>暖白</b><span>提亮偏暖,肤色柔和</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-cream.jpg" alt="奶油" loading="lazy">
+            <figcaption><b>奶油</b><span>奶白高光,柔和不刺眼</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-creamskin.jpg" alt="奶油肌" loading="lazy">
+            <figcaption><b>奶油肌</b><span>人像肤色,柔暖通透</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-peach.jpg" alt="蜜桃" loading="lazy">
+            <figcaption><b>蜜桃</b><span>粉橘高光,甜而清透</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-sakura.jpg" alt="樱花" loading="lazy">
+            <figcaption><b>樱花</b><span>粉调,柔美</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-oxygen.jpg" alt="氧气" loading="lazy">
+            <figcaption><b>氧气</b><span>极轻透的高调,像刚好有风</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-water.jpg" alt="水光" loading="lazy">
+            <figcaption><b>水光</b><span>高光有光晕,皮肤透亮</span></figcaption>
+          </figure>
+      </div>
+    </section>
+    <section class="grp">
+      <h3>风景 <span>7</span></h3>
+      <div class="grid">
+        
+          <figure class="tile">
+            <img src="/preview/tile-sky.jpg" alt="晴空" loading="lazy">
+            <figcaption><b>晴空</b><span>蓝天更蓝,反差通透</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-coast.jpg" alt="海岸" loading="lazy">
+            <figcaption><b>海岸</b><span>青蓝通透,海边</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-mountain.jpg" alt="山川" loading="lazy">
+            <figcaption><b>山川</b><span>冷绿深蓝,山野</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-forest.jpg" alt="森林" loading="lazy">
+            <figcaption><b>森林</b><span>深绿冷阴影,林间</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-snow.jpg" alt="雪景" loading="lazy">
+            <figcaption><b>雪景</b><span>冷白干净,雪地</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-sunset.jpg" alt="日落" loading="lazy">
+            <figcaption><b>日落</b><span>橙红金,逆光晚霞</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-autumn.jpg" alt="秋色" loading="lazy">
+            <figcaption><b>秋色</b><span>橙黄浓郁,秋日</span></figcaption>
+          </figure>
+      </div>
+    </section>
+    <section class="grp">
+      <h3>美食 <span>5</span></h3>
+      <div class="grid">
+        
+          <figure class="tile">
+            <img src="/preview/tile-savory.jpg" alt="鲜香" loading="lazy">
+            <figcaption><b>鲜香</b><span>暖橙高饱和,看着有食欲</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-warmfood.jpg" alt="暖食" loading="lazy">
+            <figcaption><b>暖食</b><span>暖调提亮,家常菜</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-souffle.jpg" alt="舒芙蕾" loading="lazy">
+            <figcaption><b>舒芙蕾</b><span>奶油甜点感,高光柔</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-smoke.jpg" alt="烟火" loading="lazy">
+            <figcaption><b>烟火</b><span>暗调暖光,夜市烧烤</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-crispfood.jpg" alt="清爽" loading="lazy">
+            <figcaption><b>清爽</b><span>冷白高饱和,冷饮沙拉</span></figcaption>
+          </figure>
+      </div>
+    </section>
+    <section class="grp">
+      <h3>氛围 <span>8</span></h3>
+      <div class="grid">
+        
+          <figure class="tile">
+            <img src="/preview/tile-moody.jpg" alt="暗调" loading="lazy">
+            <figcaption><b>暗调</b><span>压暗黑场,冷调氛围</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-neon.jpg" alt="霓虹" loading="lazy">
+            <figcaption><b>霓虹</b><span>洋红青蓝,夜景灯牌</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-dusk.jpg" alt="暮色" loading="lazy">
+            <figcaption><b>暮色</b><span>紫粉阴影配暖高光</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-blue.jpg" alt="蓝调" loading="lazy">
+            <figcaption><b>蓝调</b><span>冷蓝克制,纪实感</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-haze.jpg" alt="雾霾" loading="lazy">
+            <figcaption><b>雾霾</b><span>灰蓝低饱和,空气感</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-cyber.jpg" alt="赛博" loading="lazy">
+            <figcaption><b>赛博</b><span>高饱和洋红青,未来感</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-tealorange.jpg" alt="青橙" loading="lazy">
+            <figcaption><b>青橙</b><span>电影分色,青蓝阴影配暖橙</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-blackgold.jpg" alt="黑金" loading="lazy">
+            <figcaption><b>黑金</b><span>近黑白配金色高光</span></figcaption>
+          </figure>
+      </div>
+    </section>
+    <section class="grp">
+      <h3>潮流 <span>4</span></h3>
+      <div class="grid">
+        
+          <figure class="tile">
+            <img src="/preview/tile-dopamine.jpg" alt="多巴胺" loading="lazy">
+            <figcaption><b>多巴胺</b><span>高饱和明亮,彩色日常</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-maillard.jpg" alt="美拉德" loading="lazy">
+            <figcaption><b>美拉德</b><span>焦糖棕,秋冬穿搭</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-morandi.jpg" alt="莫兰迪" loading="lazy">
+            <figcaption><b>莫兰迪</b><span>低饱和灰调,安静高级</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-y2k.jpg" alt="千禧" loading="lazy">
+            <figcaption><b>千禧</b><span>洋红青配漏光,千禧年</span></figcaption>
+          </figure>
+      </div>
+    </section>
+    <section class="grp">
+      <h3>复古 <span>6</span></h3>
+      <div class="grid">
+        
+          <figure class="tile">
+            <img src="/preview/tile-film.jpg" alt="胶片" loading="lazy">
+            <figcaption><b>胶片</b><span>通用暖负片,肤色柔和</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-hongkong.jpg" alt="港风" loading="lazy">
+            <figcaption><b>港风</b><span>青绿偏色,复古市井</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-ccd.jpg" alt="CCD" loading="lazy">
+            <figcaption><b>CCD</b><span>老数码相机,冷调+颗粒+光晕</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-faded.jpg" alt="褪色" loading="lazy">
+            <figcaption><b>褪色</b><span>低反差,黑场浮起</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-oldphoto.jpg" alt="老照片" loading="lazy">
+            <figcaption><b>老照片</b><span>棕褐褪色,暗角颗粒</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-polaroid.jpg" alt="宝丽来" loading="lazy">
+            <figcaption><b>宝丽来</b><span>褪色发白,暖黄拍立得</span></figcaption>
+          </figure>
+      </div>
+    </section>
+    <section class="grp">
+      <h3>黑白 <span>4</span></h3>
+      <div class="grid">
+        
+          <figure class="tile">
+            <img src="/preview/tile-bw.jpg" alt="黑白" loading="lazy">
+            <figcaption><b>黑白</b><span>标准黑白,层次完整</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-bwcontrast.jpg" alt="高反差" loading="lazy">
+            <figcaption><b>高反差</b><span>强对比黑白,硬光</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-bwsoft.jpg" alt="柔光黑白" loading="lazy">
+            <figcaption><b>柔光黑白</b><span>低反差黑白,柔和</span></figcaption>
+          </figure>
+          <figure class="tile">
+            <img src="/preview/tile-silver.jpg" alt="银盐" loading="lazy">
+            <figcaption><b>银盐</b><span>冷灰颗粒,银盐质感</span></figcaption>
+          </figure>
+      </div>
+    </section>
+
+  <footer>
+    <p><b>说明:</b>样片用的是 App 内置示例(直出未调色原片),调色为按本图实测推导,滤镜强度 100%。页面只是静态图,实际效果在 App 里可实时调强度、看前后对比。</p>
+    <p>滤镜引擎:颜色走 33³ 3D LUT,空间效果由 WebGL shader 单通道完成;预览 / 对比 / 导出同一套管线。</p>
+    <p>样片来源(Wikimedia Commons):中餐圆桌 © Ralff Nestor Nacor / CC BY-SA 4.0 ·
+       冬日旷野 © Lukas Beck / CC BY 4.0 · 地铁站台 © Chuoterminal 02 / CC BY 3.0 · 土操场 CC0。</p>
+  </footer>
+</div>
+</body>
+</html>
